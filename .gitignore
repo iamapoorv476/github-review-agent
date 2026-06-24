@@ -1,0 +1,45 @@
+# Environment files - NEVER commit these
+.env
+.env.local
+.env.production
+*.env
+
+# Private keys - CRITICAL
+*.pem
+*.key
+private-key*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.next/
+.turbo/
+*.log
+npm-debug.log*
+
+# Docker
+docker-compose.override.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+/tests/fixtures/webhooks/*.json.bak
