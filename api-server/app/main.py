@@ -31,6 +31,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    from app.utils.queue import close_queue
+    await close_queue()
+
     logger.info("api_server_stopping")
 
 def create_app() -> FastAPI:

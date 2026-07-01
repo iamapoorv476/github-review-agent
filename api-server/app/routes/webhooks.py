@@ -1,5 +1,6 @@
 import json
 import structlog
+from app.utils.queue import enqueue_review_job
 from datetime import datetime, timezone
 from fastapi import APIRouter, Request, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -293,6 +294,7 @@ async def _handle_review_trigger(
         db=db,
         pull_request_id=pull_request.id,
         trigger=trigger.value,
+        
         idempotency_key=idempotency_key,
         triggered_by=triggered_by
     )
@@ -301,14 +303,14 @@ async def _handle_review_trigger(
         "installation_github_id": installation_id_github,
         "repo_full_name": repo_data.get("full_name", ""),
         "pr_number": pr_number,
+        "repo_id": str(repository.id),
         "head_sha": head_sha,
         "trigger": trigger.value
     }
+    bullmq_job_id = await enqueue_review_job(job_payload)
+    review_run.bullmq_job_id = bullmq_job_id
 
-    logger.info(
-        "review_job_would_enqueue",
-        **job_payload
-    )
+
 
     try:
         await mark_as_processed(redis, idempotency_key)

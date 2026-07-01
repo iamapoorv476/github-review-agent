@@ -1,0 +1,29 @@
+# Queue
+bullmq==2.10.1
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+
+# Redis
+redis==5.2.1
+
+# HTTP client (GitHub API calls)
+httpx==0.28.1
+
+# AI
+anthropic==0.40.0
+langchain-anthropic==0.3.0
+langgraph==0.2.60
+
+# Environment
+python-dotenv==1.0.1
+pydantic==2.10.3
+pydantic-settings==2.7.0
+
+# Logging
+structlog==24.4.0
+
+# JWT for GitHub App auth
+PyJWT==2.10.1
+cryptography==44.0.0

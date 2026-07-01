@@ -9,58 +9,45 @@ REVIEW_QUEUE_NAME = "review-jobs"
 
 _queue: Queue | None = None
 
+
+def _get_redis_opts(redis_url: str) -> dict:
+    """Parses redis URL into host/port dict for BullMQ."""
+    stripped = redis_url.replace("redis://", "")
+    parts = stripped.split(":")
+    return {
+        "host": parts[0],
+        "port": int(parts[1]) if len(parts) > 1 else 6379
+    }
+
+
 async def get_queue() -> Queue:
-    """
-    Returns the shared BullMQ queue instance.
-    Creates it on first call.
-    """
     global _queue
     if _queue is None:
-        settings= get_settings()
+        settings = get_settings()
+        redis_opts = _get_redis_opts(settings.redis_url)
+
         _queue = Queue(
             REVIEW_QUEUE_NAME,
-            connection={
-                "host":_parse_redis_host(settings.redis_url),
-                "port":_parse_redis_port(settings.redis_url),
+            {
+                "connection": redis_opts
             }
         )
         logger.info(
             "bullmq_queue_created",
             queue_name=REVIEW_QUEUE_NAME
         )
-        return _queue
-    
-def _parse_redis_host(redis_url: str) -> str:
-    """Extracts host from redis://host:port URL."""
-    return redis_url.replace("redis://","").split(":")[0]
+    return _queue
 
-def _parse_redis_port(redis_url: str) -> int:
-    """Extracts port from redis://host:port URL."""
-    try:
-        return int(redis_url.replace("redis://", "").split(":")[1])
-    except(IndexError, ValueError):
-        return 6379
-    
+
 async def enqueue_review_job(job_payload: dict) -> str:
-    """
-    Enqueues a review job to BullMQ.
-
-    Returns the BullMQ job ID for tracking.
-
-    Job options:
-    - attempts: 3 retries before dead letter
-    - backoff: exponential (2s, 4s, 8s between retries)
-    - removeOnComplete: keep last 100 completed jobs for Bull Board
-    - removeOnFail: keep all failed jobs for debugging
-    """
     queue = await get_queue()
 
     job = await queue.add(
         "review-pr",
         job_payload,
-        opts={
+        {
             "attempts": 3,
-            "backoff":{
+            "backoff": {
                 "type": "exponential",
                 "delay": 2000
             },
@@ -79,11 +66,8 @@ async def enqueue_review_job(job_payload: dict) -> str:
 
     return job.id
 
-async def close_queue() -> None:
-    """
-    Closes the queue connection cleanly on shutdown.
-    """
 
+async def close_queue() -> None:
     global _queue
     if _queue is not None:
         await _queue.close()
