@@ -129,32 +129,26 @@ Record each issue you find with create_finding."""
         files_changed=len(changed_files)
     )
 
-    reasoning_steps = []
+    result = await agent.ainvoke(
+        {"messages": messages}
+    )
 
-    async for chunk in agent.astream(
-        {"messages": messages},
-        stream_mode="values"
-    ):
-        last_message = chunk["messages"][-1]
-        step_type = last_message.__class__.__name__
-
+    # Log each message for visibility
+    for msg in result["messages"]:
+        step_type = msg.__class__.__name__
         logger.info(
             "agent_step",
             step_type=step_type,
-            content_preview=str(last_message.content)[:100]
+            content_preview=str(msg.content)[:200]
         )
 
-        reasoning_steps.append({
-            "step_type": step_type,
-            "content": str(last_message.content)
-        })
+    # Collect findings
+    findings = getattr(github_client, '_findings', [])
 
-        findings = getattr(github_client,'_findings', [])
+    logger.info(
+        "agent_finished",
+        findings_count=len(findings),
+        reasoning_steps=len(result["messages"])
+    )
 
-        logger.info(
-            "agent_finished",
-            findings_count=len(findings),
-            reasoning_steps=len(reasoning_steps)
-        )
-
-        return findings
+    return findings
