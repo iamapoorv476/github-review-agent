@@ -161,6 +161,72 @@ class GitHubClient:
 
             return content
     
+    async def post_review_with_comments(
+            self,
+            pr_number: int,
+            commit_sha: str,
+            summary: str,
+            comments: list[dict]
+    ) -> int:
+        """
+        Posts a complete PR review with inline comments in one API call.
+        This is the correct way to post multiple inline comments —
+        not one API call per comment.
+
+        comments format:
+        [
+            {
+                "path": "file.py",
+                "position": 5,      # diff position, not line number
+                "body": "comment text"
+            }
+        ]
+
+        Returns the GitHub review ID.
+        """
+
+        valid_comments = [
+            c for c in comments
+            if c.get("position") is not None
+        ]
+        skipped = len(comments) - len(valid_comments)
+
+        if skipped > 0:
+            logger.warning(
+               "some_comments_skipped_no_position",
+               skipped=skipped 
+            )
+        
+        payload = {
+            "commit_id": commit_sha,
+            "body": summary,
+            "event":"COMMENT",
+            "comments": valid_comments
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{GITHUB_API_BASE}/repos/{self.repo_full_name}"
+                f"/pulls/{pr_number}/reviews",
+                headers=self.headers,
+                json=payload,
+                timeout=30.0
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        review_id = data["id"]
+
+        logger.info(
+            "pr_review_posted",
+            pr_number=pr_number,
+            review_id=review_id,
+            inline_comments=len(valid_comments),
+            skipped_comments=skipped
+        )
+
+        return review_id
+    
 
 
        

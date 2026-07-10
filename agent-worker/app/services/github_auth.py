@@ -21,7 +21,7 @@ def generate_jwt() -> str:
     payload={
         "iat": now - 60,
         "exp": now + 540,
-        "iss": settings.github_app_id
+        "iss": int(settings.github_app_id)
     }
 
     token = jwt.encode(
@@ -47,7 +47,7 @@ async def get_installation_token(installation_github_id: int) -> tuple[str, date
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"{GITHUB_API_BASE}/app/installation/"
+            f"{GITHUB_API_BASE}/app/installations/"
             f"{installation_github_id}/access_tokens",
             headers={
                 "Authorization": f"Bearer {jwt_token}",
