@@ -188,32 +188,65 @@ def _build_review_summary(
 ) -> str:
     if not findings:
         return (
-            "## PR Review Complete\n\n"
-            "No significant issues found. "
-            "The code looks good to merge."
+            "## ✅ PR Review Complete\n\n"
+            "No significant issues found in this PR. "
+            "The code looks good to merge.\n\n"
+            "---\n"
+            "*Reviewed by [GitHub Review Agent](https://github.com/apps/pr-review-agent-dev)*"
         )
     
-    lines = [
-        "## PR Review Summary\n",
-        f"Found **{len(findings)} issue(s)**:\n",
-    ]
+    total = len(findings)
+    
+    lines = ["## 🔍 PR Review Summary\n"]
+
+    lines.append("### Issues Found\n")
+    lines.append("| Severity | Count |")
+    lines.append("|----------|-------|")
 
     if critical:
-        lines.append(f"- 🔴 **{len(critical)} Critical**")
+        lines.append(f"| 🔴 Critical | {len(critical)} |")
     if high:
-        lines.append(f"- 🟠 **{len(high)} High**")
+        lines.append(f"| 🟠 High | {len(high)} |")
     if medium:
-        lines.append(f"- 🟡 {len(medium)} Medium")
+        lines.append(f"| 🟡 Medium | {len(medium)} |")
     if low:
-        lines.append(f"- 🔵 {len(low)} Low")
+         lines.append(f"| 🔵 Low | {len(low)} |")
+    lines.append(f"| **Total** | **{total}** |")
 
-    if critical or high:
+    lines.append("")
+    if critical:
         lines.append(
-            "\n⚠️ **This PR has critical or high severity issues "
-            "that should be addressed before merging.**"
+            "### ⛔ Recommendation: Do Not Merge\n"
+            "This PR contains **critical** severity issues that must "
+            "be resolved before merging."
         )
+    elif high:
+        lines.append(
+            "### ⚠️ Recommendation: Review Required\n"
+            "This PR contains **high** severity issues that should "
+            "be addressed before merging."
+        )
+    else:
+        lines.append(
+            "### ✅ Recommendation: Merge with Minor Fixes\n"
+            "No critical or high severity issues found. "
+            "Consider addressing the remaining findings."
+        )
+    
+    files_affected = list({f["file_path"] for f in findings})
+    if files_affected:
+        lines.append(f"\n### Files Reviewed")
+        for f in files_affected[:10]:
+            file_findings = [x for x in findings if x["file_path"] == f]
+            lines.append(f"- `{f}` — {len(file_findings)} issue(s)")
 
-    lines.append("\n*Review powered by GitHub Review Agent*")
+    lines.append(
+        "\n---\n"
+        "*Reviewed by [GitHub Review Agent]"
+        "(https://github.com/apps/pr-review-agent-dev) • "
+        "Comment `@agent re-review` to trigger a new review*"
+    )
+
     return "\n".join(lines)
 
 def _format_comment(finding: dict) -> str:

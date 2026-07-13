@@ -174,21 +174,53 @@ async def _handle_review_trigger(
     pr_data = payload.get("pull_request", {})
 
     if trigger == ReviewTrigger.COMMENT_REREVIEW:
+        from app.services.github_app_client import fetch_pr_current_state
+
+
         issue_data = payload.get("issue", {})
         pr_number = issue_data.get("number")
-
-        head_sha = issue_data.get(
-            "pull_request", {}
-        ).get("head", {}).get("sha","unknown")
-        title = issue_data.get("title", "")
-        author_login= issue_data.get("user",{}).get("login","")
         triggered_by = payload.get(
             "comment", {}
         ).get("user", {}).get("login")
-        base_branch = "unknown"
-        head_branch ="unknown"
-        github_pr_id = issue_data.get("id", 0)
-        pr_opened_at = datetime.now(timezone.utc)
+        repo_full_name = repo_data.get("full_name", "")
+        installation_github_id_for_fetch = installation_data.get("id")
+
+        try:
+            pr_state = await fetch_pr_current_state(
+                installation_github_id=installation_github_id_for_fetch,
+                repo_full_name=repo_full_name,
+                pr_number=pr_number
+            )
+            head_sha = pr_state["head_sha"]
+            title = pr_state["title"]
+            author_login = pr_state["author_login"]
+            base_branch = pr_state["base_branch"]
+            head_branch = pr_state["head_branch"]
+            github_pr_id = pr_state["github_pr_id"]
+            try:
+                pr_opened_at = datetime.fromisoformat(
+                    pr_state["pr_opened_at"].replace("Z", "+00:00")
+                )
+            except (ValueError, AttributeError):
+                pr_opened_at = datetime.now(timezone.utc)
+
+            logger.info(
+                "rereview_pr_state_fetched",
+                pr_number=pr_number,
+                head_sha=head_sha[:8]
+            )
+        except Exception as e:
+            logger.error(
+                "rereview_pr_state_fetch_failed",
+                pr_number=pr_number,
+                error=str(e)
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Could not fetch PR state for re-review"
+            )
+    
+        
     else:
         pr_number = pr_data.get("number")
         head_sha = pr_data.get("head", {}).get("sha", "")
