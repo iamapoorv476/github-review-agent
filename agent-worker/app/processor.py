@@ -5,6 +5,23 @@ from app.services.review_run_repository import update_review_run_status, get_rev
 
 logger = structlog.get_logger()
 
+# Keep in sync with the model passed to ChatAnthropic in app/agent/reviewer.py
+AGENT_MODEL = "claude-haiku-4-5"
+
+# USD per million tokens — update if you change AGENT_MODEL or pricing changes
+_INPUT_COST_PER_MTOK = 1.00
+_OUTPUT_COST_PER_MTOK = 5.00
+
+
+def _estimate_cost(input_tokens: int, output_tokens: int) -> float:
+    """Rough review cost in USD, from published per-MTok pricing."""
+    return round(
+        (input_tokens * _INPUT_COST_PER_MTOK
+         + output_tokens * _OUTPUT_COST_PER_MTOK) / 1_000_000,
+        6
+    )
+
+
 async def process_review_job(job_data: dict) -> None:
     """
     Full review pipeline:
@@ -81,7 +98,7 @@ async def process_review_job(job_data: dict) -> None:
                 "step_running_agent",
                 mock=settings.mock_llm
             )
-            findings= await run_review_agent(
+            findings, reasoning_steps, usage = await run_review_agent(
                 github_client=github_client,
                 position_maps=position_maps,
                 head_sha=head_sha,
@@ -91,7 +108,8 @@ async def process_review_job(job_data: dict) -> None:
 
             logger.info(
                 "agent_completed",
-                findings_count=len(findings)
+                findings_count=len(findings),
+                reasoning_steps=len(reasoning_steps)
             )
 
             # Step 7 — Build review summary
@@ -130,6 +148,11 @@ async def process_review_job(job_data: dict) -> None:
                 db, review_run_id, findings
             )
 
+            # Store the reasoning trace for the dashboard trace viewer
+            logger.info("step_storing_reasoning_steps")
+            await _store_reasoning_steps(
+                db, review_run_id, reasoning_steps
+            )
 
             # Update review run as completed
             from app.models.review_run import ReviewRun
@@ -144,11 +167,26 @@ async def process_review_job(job_data: dict) -> None:
             review_run = result.scalar_one()
             review_run.status = "completed"
             review_run.completed_at = datetime.now(timezone.utc)
+            if review_run.started_at:
+                delta = review_run.completed_at - review_run.started_at
+                review_run.duration_ms = int(delta.total_seconds() * 1000)
             review_run.findings_count = len(findings)
             review_run.critical_count = len(critical)
             review_run.high_count = len(high)
             review_run.medium_count = len(medium)
             review_run.low_count = len(low)
+
+            # LLM usage — surfaced on the dashboard
+            review_run.model_used = (
+                "mock" if settings.mock_llm else AGENT_MODEL
+            )
+            review_run.input_tokens = usage["input_tokens"]
+            review_run.output_tokens = usage["output_tokens"]
+            review_run.tool_calls_made = usage["tool_calls"]
+            review_run.total_cost_usd = _estimate_cost(
+                usage["input_tokens"], usage["output_tokens"]
+            )
+
             if github_review_id:
                 review_run.github_review_id = github_review_id
 
@@ -295,6 +333,41 @@ async def _store_findings(
         count=len(findings),
         review_run_id=review_run_id
     )
-            
 
-            
+
+async def _store_reasoning_steps(
+        db,
+        review_run_id: str,
+        steps: list[dict]
+) -> None:
+    """
+    Stores the agent's reasoning trace — powers the dashboard's
+    trace viewer (thought / tool_call / tool_result / finding / summary).
+    """
+    import uuid
+    from datetime import datetime, timezone
+    from app.models.reasoning_step import ReasoningStep
+
+    now = datetime.now(timezone.utc)
+
+    for s in steps:
+        step = ReasoningStep(
+            review_run_id=uuid.UUID(review_run_id),
+            step_number=s["step_number"],
+            step_type=s["step_type"],
+            content=s["content"],
+            tool_name=s.get("tool_name"),
+            tool_input=s.get("tool_input"),
+            tool_output_summary=s.get("tool_output_summary"),
+            started_at=s.get("started_at") or now,
+            duration_ms=s.get("duration_ms"),
+            tokens_used=s.get("tokens_used", 0)
+        )
+        db.add(step)
+
+    await db.flush()
+    logger.info(
+        "reasoning_steps_stored",
+        count=len(steps),
+        review_run_id=review_run_id
+    )

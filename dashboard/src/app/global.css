@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+/*
+ * Marginalia design system — manuscript pigments on cold-press paper.
+ * Every color in the app comes from these tokens. Rubric red is reserved
+ * for critical findings and the brand pilcrow — never decoration.
+ */
+@theme {
+  --color-paper: #f2f3ef;
+  --color-raised: #fcfcfa;
+  --color-recess: #eaebe6;
+  --color-ink: #1e242b;
+  --color-ink-2: #4c5560;
+  --color-ink-3: #8b929b;
+  --color-line: #dfe1d9;
+  --color-line-2: #cdd0c6;
+  --color-lapis: #2d5fa8;
+  --color-lapis-ink: #234c87;
+  --color-lapis-wash: #e7edf6;
+  --color-rubric: #b23b32;
+  --color-rubric-wash: #f6e8e6;
+  --color-gold: #9a7124;
+  --color-gold-wash: #f4eddc;
+  --color-verdigris: #3e7d6c;
+  --color-verdigris-wash: #e4efea;
+  --color-slate-wash: #e9ebee;
+  --color-add-wash: #e4efe4;
+  --color-del-wash: #f5e7e4;
+
+  --font-sans: var(--font-archivo), system-ui, sans-serif;
+  --font-serif: var(--font-newsreader), Georgia, serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+
+  --shadow-card: 0 1px 2px rgba(30, 36, 43, 0.05), 0 4px 16px rgba(30, 36, 43, 0.05);
+  --shadow-lift: 0 1px 2px rgba(30, 36, 43, 0.05), 0 6px 24px rgba(30, 36, 43, 0.07);
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-variation-settings: "wdth" 96;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-lapis);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-lapis);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* The agent's voice — everything Marginalia "says" is set in Newsreader italic. */
+.voice {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-optical-sizing: auto;
+  letter-spacing: 0.01em;
+}
+
+/* Ruled-paper texture behind the dashboard sidebar. */
+.ruled {
+  background:
+    linear-gradient(90deg, transparent calc(100% - 1px), var(--color-line-2) calc(100% - 1px)),
+    repeating-linear-gradient(transparent 0 27px, rgba(30, 36, 43, 0.035) 27px 28px),
+    var(--color-paper);
+}
+
+/* Dashed leader line joining a code excerpt to its margin note. */
+.leader::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: repeating-linear-gradient(var(--color-line-2) 0 4px, transparent 4px 8px);
+}
+
+/* Dotted spine of the reasoning trace. */
+.trace-spine::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: repeating-linear-gradient(var(--color-line-2) 0 5px, transparent 5px 10px);
+}
+
+/* Pilcrow anchor on a flagged diff line. */
+.flagline::after {
+  content: "¶";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-serif);
+  font-style: italic;
+  color: var(--color-rubric);
+  font-size: 13px;
+}
+
+@keyframes pulse-ring {
+  from { transform: scale(0.4); opacity: 0.7; }
+  to { transform: scale(1.2); opacity: 0; }
+}
+.pulse-dot { position: relative; }
+.pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-verdigris);
+  animation: pulse-ring 1.8s ease-out infinite;
+}
+
+@keyframes caret-blink { 50% { opacity: 0; } }
+.caret-blink { animation: caret-blink 1s steps(1) infinite; }
+
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+.row-in { animation: row-in 0.45s ease both; }
+
+/* Scroll-reveal (landing) — .in is added by the Reveal component. */
+.reveal {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.55s ease, transform 0.55s ease;
+}
+.reveal.in { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .reveal { opacity: 1; transform: none; }
+}
