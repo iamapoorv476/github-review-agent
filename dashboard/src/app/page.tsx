@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ReplayHero } from "@/components/replay-hero";
 import { Reveal } from "@/components/reveal";
 import { SeverityBadge } from "@/components/badges";
+import { githubInstallUrl } from "@/lib/github";
 
 const BTN =
   "inline-flex items-center gap-2 rounded-[7px] border px-5 py-2.5 text-sm font-semibold no-underline transition-all";
@@ -125,7 +126,7 @@ export default function LandingPage() {
             <Link href="/dashboard" className="text-[13.5px] font-medium text-ink-2 no-underline hover:text-ink">
               Live demo
             </Link>
-            <a href="#install" className={`${BTN_INK} px-4 py-2 text-[13px]`}>
+            <a href={githubInstallUrl} className={`${BTN_INK} px-4 py-2 text-[13px]`}>
               Install on GitHub
             </a>
           </div>
@@ -150,7 +151,7 @@ export default function LandingPage() {
                 the reasoning that produced it.
               </p>
               <div className="mt-7 flex flex-wrap gap-3">
-                <a href="#install" className={BTN_LAPIS}>Install on GitHub</a>
+                <a href={githubInstallUrl} className={BTN_LAPIS}>Install on GitHub</a>
                 <Link href="/dashboard" className={BTN_GHOST}>Explore the dashboard →</Link>
               </div>
               <p className="mt-4 text-xs text-ink-3">
@@ -281,7 +282,7 @@ export default function LandingPage() {
                 ))}
               </ul>
               <div className="mt-7">
-                <Link href="/dashboard/reviews/rev_412" className={BTN_GHOST}>
+                <Link href="/dashboard" className={BTN_GHOST}>
                   Open a real trace →
                 </Link>
               </div>
@@ -358,7 +359,7 @@ export default function LandingPage() {
               shows its work.
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-3">
-              <a href="#" className={BTN_LAPIS}>Install on GitHub — free while in beta</a>
+              <a href={githubInstallUrl} className={BTN_LAPIS}>Install on GitHub — free while in beta</a>
               <Link href="/dashboard" className={BTN_GHOST}>See the dashboard first</Link>
             </div>
           </div>
@@ -373,7 +374,7 @@ export default function LandingPage() {
           </Link>
           <a href="#how" className="text-ink-2 no-underline hover:text-ink">How it reviews</a>
           <Link href="/dashboard" className="text-ink-2 no-underline hover:text-ink">Dashboard demo</Link>
-          <a href="#" className="text-ink-2 no-underline hover:text-ink">GitHub</a>
+          <a href={githubInstallUrl} className="text-ink-2 no-underline hover:text-ink">Install</a>
           <span className="ml-auto font-mono text-[11px]">
             reviews posted in ~2 minutes · findings with receipts
           </span>

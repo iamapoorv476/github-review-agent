@@ -326,6 +326,48 @@ async def update_repo(
     return _repo_settings(repo)
 
 
+@router.get("/installations/by-github-id/{github_install_id}")
+async def get_installation_by_github_id(
+    github_install_id: int,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    Resolve an installation by GitHub's numeric install id.
+
+    Used by the /welcome page: GitHub redirects there after install with
+    ?installation_id=<github_install_id>, and the page needs to confirm
+    which account + repos were just connected.
+    """
+    installation = (await db.execute(
+        select(Installation)
+        .where(Installation.github_install_id == github_install_id)
+        .options(selectinload(Installation.repositories))
+    )).scalar_one_or_none()
+
+    if installation is None:
+        raise HTTPException(status_code=404, detail="Installation not found")
+
+    repos = sorted(installation.repositories, key=lambda r: r.full_name)
+    return {
+        "id": str(installation.id),
+        "account_login": installation.account_login,
+        "account_type": installation.account_type,
+        "account_avatar_url": installation.account_avatar_url,
+        "review_enabled": installation.review_enabled,
+        "review_categories": installation.review_categories,
+        "repositories": [
+            {
+                "id": str(r.id),
+                "full_name": r.full_name,
+                "is_private": r.is_private,
+                "default_branch": r.default_branch,
+                "review_enabled": r.review_enabled,
+            }
+            for r in repos
+        ],
+    }
+
+
 @router.patch("/installations/{installation_id}")
 async def update_installation(
     installation_id: str,

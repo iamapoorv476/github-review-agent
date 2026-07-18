@@ -339,6 +339,56 @@ export async function getReview(id: string): Promise<ReviewDetail | null> {
   };
 }
 
+export interface InstalledRepo {
+  id: string;
+  fullName: string;
+  isPrivate: boolean;
+  defaultBranch: string;
+  reviewEnabled: boolean;
+}
+
+export interface Installation {
+  id: string;
+  accountLogin: string;
+  accountType: string; // "Organization" | "User"
+  accountAvatarUrl: string | null;
+  reviewEnabled: boolean;
+  reviewCategories: string[];
+  repositories: InstalledRepo[];
+}
+
+/**
+ * Look up an installation by GitHub's numeric install id — used by the
+ * /welcome page after GitHub redirects the user post-install. Returns null
+ * if the webhook hasn't landed yet (the record is created asynchronously).
+ */
+export async function getInstallationByGithubId(
+  githubInstallId: string | number
+): Promise<Installation | null> {
+  let r: any;
+  try {
+    r = await api<any>(`/api/installations/by-github-id/${githubInstallId}`);
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("API 404")) return null;
+    throw e;
+  }
+  return {
+    id: r.id,
+    accountLogin: r.account_login,
+    accountType: r.account_type,
+    accountAvatarUrl: r.account_avatar_url,
+    reviewEnabled: r.review_enabled,
+    reviewCategories: r.review_categories,
+    repositories: r.repositories.map((repo: any) => ({
+      id: repo.id,
+      fullName: repo.full_name,
+      isPrivate: repo.is_private,
+      defaultBranch: repo.default_branch,
+      reviewEnabled: repo.review_enabled,
+    })),
+  };
+}
+
 export async function getRepoSettings(): Promise<RepoSettings[]> {
   const repos = await api<any[]>("/api/repos");
   return repos.map(mapRepo);

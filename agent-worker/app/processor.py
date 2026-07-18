@@ -167,9 +167,6 @@ async def process_review_job(job_data: dict) -> None:
             review_run = result.scalar_one()
             review_run.status = "completed"
             review_run.completed_at = datetime.now(timezone.utc)
-            if review_run.started_at:
-                delta = review_run.completed_at - review_run.started_at
-                review_run.duration_ms = int(delta.total_seconds() * 1000)
             review_run.findings_count = len(findings)
             review_run.critical_count = len(critical)
             review_run.high_count = len(high)
