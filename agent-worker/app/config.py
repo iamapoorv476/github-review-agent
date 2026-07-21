@@ -3,20 +3,26 @@ from pydantic import Field
 from functools import lru_cache
 from pathlib import Path
 
+
 class WorkerSettings(BaseSettings):
     app_env: str = Field(default="development")
 
+    # GitHub App
     github_app_id: str = Field(...)
     github_private_key_path: str = Field(default="./private-key.pem")
 
+    # Database
     database_url: str = Field(...)
 
+    # Redis
     redis_url: str = Field(default="redis://localhost:6379")
 
+    # AI
     anthropic_api_key: str = Field(...)
 
-    worker_concurrency: int = Field(default=2)
-    mock_llm: bool = Field(default=True)
+    # Worker
+    concurrency: int = Field(default=2)
+    mock_llm: bool = Field(default=False)
 
     # Encryption
     encryption_key: str = Field(...)
@@ -37,7 +43,8 @@ class WorkerSettings(BaseSettings):
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
-        "case_sensitive": False
+        "case_sensitive": False,
+        "extra": "ignore"
     }
 
 

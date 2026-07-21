@@ -94,4 +94,3 @@ async def deactivate_installation(
             "installation_not_found_on_deactivate",
             github_install_id=github_install_id
         )
-

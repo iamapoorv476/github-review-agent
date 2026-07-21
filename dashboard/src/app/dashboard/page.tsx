@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getReviews, getStats } from "@/lib/data";
 import { VerdictBadge, FindingDots } from "@/components/badges";
+import { ReReviewButton } from "@/components/rereview-dialog";
 
 export const metadata = { title: "Marginalia — Reviews" };
 
@@ -27,9 +28,7 @@ export default async function ReviewsPage() {
             Every pull request the agent has read, annotated, and signed off on.
           </p>
         </div>
-        <button className="inline-flex items-center gap-2 rounded-md border border-lapis bg-lapis px-3.5 py-2 text-[13px] font-semibold text-white hover:bg-lapis-ink">
-          ⟳ Re-review a PR
-        </button>
+        <ReReviewButton />
       </div>
 
       <div className="mb-6 grid grid-cols-4 gap-2.5 max-lg:grid-cols-2">

@@ -14,10 +14,21 @@ from app.utils.idempotency import (
     mark_as_processed
 )
 from app.utils.redis import get_redis
-from app.services.installation_repository import upsert_installation
-from app.services.repository_repository import upsert_repository
+from app.services.installation_repository import (
+    upsert_installation,
+    get_installation_by_github_id,
+)
+from app.services.repository_repository import (
+    upsert_repository,
+    register_repositories_from_install,
+    disable_repositories_by_github_id,
+)
 from app.services.pull_request_repository import upsert_pull_request
-from app.services.review_run_repository import create_review_run
+from app.services.review_run_repository import (
+    create_review_run,
+    count_reviews_today_for_installation,
+)
+from app.config import get_settings
 
 logger = structlog.get_logger()
 router = APIRouter(tags=["webhooks"])
@@ -84,6 +95,9 @@ async def github_webhook(
     
     if filtered.trigger == ReviewTrigger.INSTALLATION_DELETED:
         return await _handle_installation_deleted(payload, db)
+
+    if filtered.trigger == ReviewTrigger.INSTALLATION_REPOS_CHANGED:
+        return await _handle_installation_repos_changed(payload, db)
     
     if filtered.trigger in (
         ReviewTrigger.PR_OPENED,
@@ -107,7 +121,7 @@ async def _handle_installation_created(
     installation_data = payload.get("installation", {})
     account = installation_data.get("account", {})
 
-    await upsert_installation(
+    installation = await upsert_installation(
         db=db,
         github_install_id=installation_data["id"],
         account_login=account.get("login", ""),
@@ -116,13 +130,27 @@ async def _handle_installation_created(
         installed_at=datetime.now(timezone.utc)
     )
 
+    # Register the repos selected during install so /welcome shows the true
+    # selection immediately, instead of waiting for the first PR (lazy path).
+    repositories = payload.get("repositories", [])
+    repo_count = await register_repositories_from_install(
+        db=db,
+        installation_id=installation.id,
+        repositories=repositories,
+    )
+
     logger.info(
         "installation_created",
         github_install_id=installation_data["id"],
-        account=account.get("login")
+        account=account.get("login"),
+        repo_count=repo_count
     )
 
-    return {"status": "ok", "action": "installation_created"}
+    return {
+        "status": "ok",
+        "action": "installation_created",
+        "repositories_registered": repo_count
+    }
 
 async def _handle_installation_deleted(
     payload: dict,
@@ -147,6 +175,58 @@ async def _handle_installation_deleted(
     )
 
     return {"status": "ok", "action": "installation_deleted"}
+
+async def _handle_installation_repos_changed(
+    payload: dict,
+    db: AsyncSession
+) -> dict:
+    """
+    Handles repos being added to / removed from an existing installation
+    (the `installation_repositories` event). Keeps the dashboard and /welcome
+    in sync with the repo selection on GitHub without waiting for a PR.
+    """
+    installation_data = payload.get("installation", {})
+    github_install_id = installation_data.get("id")
+
+    # The installation must already exist (created on install). If a race
+    # means it doesn't, upsert a minimal record from this payload's account.
+    installation = await get_installation_by_github_id(db, github_install_id)
+    if installation is None:
+        account = installation_data.get("account", {})
+        installation = await upsert_installation(
+            db=db,
+            github_install_id=github_install_id,
+            account_login=account.get("login", ""),
+            account_type=account.get("type", "User"),
+            account_avatar_url=account.get("avatar_url"),
+            installed_at=datetime.now(timezone.utc)
+        )
+
+    added = await register_repositories_from_install(
+        db=db,
+        installation_id=installation.id,
+        repositories=payload.get("repositories_added", []),
+    )
+    removed = await disable_repositories_by_github_id(
+        db=db,
+        github_repo_ids=[
+            r["id"] for r in payload.get("repositories_removed", [])
+        ],
+    )
+
+    logger.info(
+        "installation_repos_changed",
+        github_install_id=github_install_id,
+        added=added,
+        removed=removed
+    )
+
+    return {
+        "status": "ok",
+        "action": "installation_repos_changed",
+        "added": added,
+        "removed": removed
+    }
 
 async def _handle_review_trigger(
         payload: dict,
@@ -295,6 +375,54 @@ async def _handle_review_trigger(
         installed_at=datetime.now(timezone.utc)
     )
 
+    # ----------------------------------------------------------------
+    # Daily cost cap — every review is real LLM spend. Enforced per
+    # installation per UTC day, before anything is enqueued.
+    # ----------------------------------------------------------------
+    settings = get_settings()
+    cap = settings.max_reviews_per_installation_per_day
+    if cap > 0:
+        reviews_today = await count_reviews_today_for_installation(
+            db=db, installation_id=installation.id
+        )
+        if reviews_today >= cap:
+            logger.warning(
+                "review_cap_reached",
+                installation_id=str(installation.id),
+                account=account.get("login"),
+                reviews_today=reviews_today,
+                cap=cap
+            )
+            # Tell the PR author once per PR per day — not on every push.
+            notice_key = (
+                f"gra:capnotice:{installation_id_github}:"
+                f"{repo_data.get('id', 0)}:{pr_number}:"
+                f"{datetime.now(timezone.utc):%Y%m%d}"
+            )
+            try:
+                first_notice = await redis.set(notice_key, "1", ex=86400, nx=True)
+            except Exception:
+                first_notice = False  # Redis hiccup — skip the comment, keep the 200
+            if first_notice and not settings.mock_github:
+                from app.services.github_app_client import post_issue_comment
+                await post_issue_comment(
+                    installation_github_id=installation_id_github,
+                    repo_full_name=repo_data.get("full_name", ""),
+                    pr_number=pr_number,
+                    body=(
+                        f"Marginalia has reached its daily review limit for "
+                        f"this account ({cap} reviews). The limit resets at "
+                        f"midnight UTC — comment `@marginalia review` then to "
+                        f"review this PR."
+                    ),
+                )
+            # Deliberately NOT marked in idempotency: the same head_sha can
+            # be reviewed after the cap resets via @marginalia review.
+            return {
+                "status": "ignored",
+                "reason": f"daily review cap reached ({reviews_today}/{cap})"
+            }
+
     repository = await upsert_repository(
         db=db,
         installation_id=installation.id,
@@ -366,6 +494,3 @@ async def _handle_review_trigger(
         "review_run_id": str(review_run.id),
         "trigger": trigger.value
     }
-
-
-

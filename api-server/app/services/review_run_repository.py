@@ -1,12 +1,40 @@
 import structlog
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 import uuid
 
 from app.models.review_run import ReviewRun
+from app.models.pull_request import PullRequest
+from app.models.repository import Repository
 
 logger = structlog.get_logger()
+
+
+async def count_reviews_today_for_installation(
+    db: AsyncSession,
+    installation_id: uuid.UUID,
+) -> int:
+    """
+    Number of review runs queued since UTC midnight across all repos of an
+    installation. Used by the daily cost cap — counts every run regardless
+    of status, so failed runs still consume quota (they spent tokens too).
+    """
+    day_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    result = await db.execute(
+        select(func.count())
+        .select_from(ReviewRun)
+        .join(PullRequest, ReviewRun.pull_request_id == PullRequest.id)
+        .join(Repository, PullRequest.repository_id == Repository.id)
+        .where(
+            Repository.installation_id == installation_id,
+            ReviewRun.queued_at >= day_start,
+        )
+    )
+    return result.scalar_one()
 
 
 async def create_review_run(

@@ -10,6 +10,7 @@ class ReviewTrigger(Enum):
     COMMENT_REREVIEW = "comment_rereview"
     INSTALLATION_CREATED = "installation_created"
     INSTALLATION_DELETED = "installation_deleted"
+    INSTALLATION_REPOS_CHANGED = "installation_repos_changed"
     IGNORED = "ignored"
 
 @dataclass
@@ -57,9 +58,11 @@ def filter_webhook_event(
         )
     if event_type == "issue_comment":
         if action == "created":
-            comment_body = payload.get("comment", {}).get("body", "")
-            # Check for re-review trigger
-            if "@agent re-review" in comment_body.lower():
+            comment_body = payload.get("comment", {}).get("body", "").lower()
+            # Check for re-review trigger. The UI advertises
+            # "@marginalia review"; "@agent re-review" is kept as a legacy
+            # alias so older instructions keep working.
+            if "@marginalia review" in comment_body or "@agent re-review" in comment_body:
                 # Only trigger on PRs, not regular issues
                 is_pr = "pull_request" in payload.get("issue", {})
                 if is_pr:
@@ -85,6 +88,14 @@ def filter_webhook_event(
                 trigger=ReviewTrigger.INSTALLATION_DELETED,
                 should_process=True,
                 reason="App uninstalled"
+            )
+    if event_type == "installation_repositories":
+        # Fired when repos are added to / removed from an existing install.
+        if action in ("added", "removed"):
+            return FilteredEvent(
+                trigger=ReviewTrigger.INSTALLATION_REPOS_CHANGED,
+                should_process=True,
+                reason=f"Installation repositories {action}"
             )
     logger.debug(
         "webhook_event_ignored",

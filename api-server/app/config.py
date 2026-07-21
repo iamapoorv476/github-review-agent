@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     mock_llm: bool = Field(default=True)
     mock_github: bool = Field(default=False)
 
+    # Cost guard: max reviews per installation per UTC day. Every review is
+    # real LLM spend, so a public install must not be able to run unbounded.
+    # 0 disables the cap (dev/local only — never in production).
+    max_reviews_per_installation_per_day: int = Field(default=25)
+
     encryption_key: str = Field(...)
 
     @property
