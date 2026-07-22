@@ -17,6 +17,8 @@ class Settings(BaseSettings):
 
     database_url: str = Field(...)
 
+    frontend_origin: str = Field(default="http://localhost:3000")
+
     redis_url: str = Field(default="redis://localhost:6379")
 
     anthropic_api_key: str = Field(...)
