@@ -9,40 +9,65 @@ logger = structlog.get_logger()
 
 GITHUB_API_BASE = "https://api.github.com"
 
+
+def _clean_private_key(key: str) -> str:
+    """
+    Ensures the private key has proper PEM formatting.
+    Handles cases where newlines are stored as literal \n strings.
+    """
+    # If key contains literal \n strings, replace with real newlines
+    if "\\n" in key:
+        key = key.replace("\\n", "\n")
+
+    # If key is all on one line (no newlines), reformat it
+    if "\n" not in key:
+        # Extract the base64 content between headers
+        key = key.replace(
+            "-----BEGIN RSA PRIVATE KEY-----", ""
+        ).replace(
+            "-----END RSA PRIVATE KEY-----", ""
+        ).replace(
+            "-----BEGIN PRIVATE KEY-----", ""
+        ).replace(
+            "-----END PRIVATE KEY-----", ""
+        ).strip()
+
+        # Reformat with proper line breaks every 64 chars
+        chunks = [key[i:i+64] for i in range(0, len(key), 64)]
+        key = (
+            "-----BEGIN RSA PRIVATE KEY-----\n" +
+            "\n".join(chunks) +
+            "\n-----END RSA PRIVATE KEY-----\n"
+        )
+
+    return key.strip()
+
+
 def generate_jwt() -> str:
-    """
-    Generates a short-lived JWT signed with your GitHub App private key.
-    This JWT proves you are the owner of the GitHub App.
-    Valid for 10 minutes maximum (GitHub enforces this).
-    """
     settings = get_settings()
 
     now = int(time.time())
-    payload={
+    payload = {
         "iat": now - 60,
         "exp": now + 540,
         "iss": int(settings.github_app_id)
     }
 
+    private_key = _clean_private_key(settings.github_private_key)
+
     token = jwt.encode(
         payload,
-        settings.github_private_key,
-        algorithm ="RS256"
+        private_key,
+        algorithm="RS256"
     )
 
-    logger.debug("github_jwt_generated", app_id =settings.github_app_id)
+    logger.debug("github_jwt_generated", app_id=settings.github_app_id)
     return token
 
-async def get_installation_token(installation_github_id: int) -> tuple[str, datetime]:
-    """
-    Requests a fresh installation access token from GitHub.
-    Returns (token, expires_at).
 
-    This token:
-    - Is scoped to one specific installation
-    - Expires in exactly 1 hour
-    - Can read PRs, post comments, read file contents
-    """
+async def get_installation_token(
+    installation_github_id: int
+) -> tuple[str, datetime]:
     jwt_token = generate_jwt()
 
     async with httpx.AsyncClient() as client:
@@ -56,7 +81,7 @@ async def get_installation_token(installation_github_id: int) -> tuple[str, date
             }
         )
 
-        if response.status_code !=201:
+        if response.status_code != 201:
             logger.error(
                 "github_token_request_failed",
                 status=response.status_code,
@@ -66,7 +91,7 @@ async def get_installation_token(installation_github_id: int) -> tuple[str, date
                 f"Failed to get installation token: "
                 f"{response.status_code} {response.text[:200]}"
             )
-        
+
         data = response.json()
         token = data["token"]
         expires_at = datetime.fromisoformat(
@@ -80,44 +105,35 @@ async def get_installation_token(installation_github_id: int) -> tuple[str, date
         )
 
         return token, expires_at
-    
+
+
 def token_needs_rotation(expires_at: datetime) -> bool:
-    """
-    Returns True if token expires within 5 minutes.
-    5-minute buffer prevents using a token that expires mid-API-call.
-    """
     buffer = timedelta(minutes=5)
     now = datetime.now(timezone.utc)
-    return(expires_at - now) < buffer
+    return (expires_at - now) < buffer
+
 
 async def get_valid_token(
-        installation_github_id: int,
-        db
+    installation_github_id: int,
+    db
 ) -> str:
-    """
-    Returns a valid installation access token.
-    Rotates automatically if expiring within 5 minutes.
-
-    This is the only function the processor calls —
-    token rotation is fully transparent to the caller.
-    """
     from sqlalchemy import select
     from app.models.installation import Installation
     from app.utils.encryption import decrypt_token, encrypt_token
-    
+
     result = await db.execute(
         select(Installation).where(
             Installation.github_install_id == installation_github_id
         )
     )
-    installation= result.scalar_one_or_none()
+    installation = result.scalar_one_or_none()
 
     if not installation:
         raise Exception(
             f"Installation {installation_github_id} not found in database"
         )
-    
-    if(
+
+    if (
         installation.access_token
         and installation.access_token_expires_at
         and not token_needs_rotation(installation.access_token_expires_at)
@@ -128,6 +144,7 @@ async def get_valid_token(
             expires_at=installation.access_token_expires_at.isoformat()
         )
         return decrypt_token(installation.access_token)
+
     logger.info(
         "github_token_rotating",
         installation_id=installation_github_id
