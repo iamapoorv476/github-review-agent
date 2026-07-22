@@ -33,13 +33,22 @@ class Settings(BaseSettings):
 
     @property
     def github_private_key(self) -> str:
+        import os
+    # Try environment variable first (production/Railway)
+        key_from_env = os.environ.get("GITHUB_PRIVATE_KEY")
+        if key_from_env:
+        # Replace literal \n with actual newlines
+           return key_from_env.replace("\\n", "\n")
+    # Fall back to file (local development)
         key_path = Path(self.github_private_key_path)
         if not key_path.exists():
             raise FileNotFoundError(
-                f"GitHub private key not found at {key_path}."
-                f"Copy your .pem file to {key_path}"
-            )
+                f"GitHub private key not found at {key_path}. "
+                f"Set GITHUB_PRIVATE_KEY env var or copy .pem file."
+        )
         return key_path.read_text()
+
+
     @property
     def is_development(self) -> bool:
         return self.app_env == "development"

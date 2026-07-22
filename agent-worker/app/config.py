@@ -29,11 +29,15 @@ class WorkerSettings(BaseSettings):
 
     @property
     def github_private_key(self) -> str:
+        import os
+        key_from_env = os.environ.get("GITHUB_PRIVATE_KEY")
+        if key_from_env:
+            return key_from_env.replace("\\n", "\n")
         key_path = Path(self.github_private_key_path)
         if not key_path.exists():
             raise FileNotFoundError(
-                f"Private key not found at {key_path}"
-            )
+            f"Private key not found at {key_path}"
+        )
         return key_path.read_text()
 
     @property
