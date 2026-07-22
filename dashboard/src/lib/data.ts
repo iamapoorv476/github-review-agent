@@ -72,6 +72,7 @@ export interface Finding {
   fix: string | null; // suggestion
   codeSnippet: string | null;
   wasPosted: boolean;
+  githubCommentId: number | null; // deep-link to the PR comment thread
 }
 
 export interface TraceStep {
@@ -244,6 +245,7 @@ function mapFinding(f: any): Finding {
     fix: f.suggestion,
     codeSnippet: f.code_snippet,
     wasPosted: f.was_posted,
+    githubCommentId: f.github_comment_id,
   };
 }
 

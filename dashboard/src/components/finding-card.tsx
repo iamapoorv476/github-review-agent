@@ -8,7 +8,23 @@ import { SeverityBadge } from "./badges";
  * Backend provides code_snippet as a plain string (not a structured diff),
  * so the excerpt is rendered as-is rather than as add/del rows.
  */
-export function FindingCard({ finding, delay = 0 }: { finding: Finding; delay?: number }) {
+export function FindingCard({
+  finding,
+  delay = 0,
+  prUrl,
+}: {
+  finding: Finding;
+  delay?: number;
+  /** e.g. https://github.com/owner/repo/pull/15 — for the link-out */
+  prUrl?: string;
+}) {
+  // Deep-link to the exact review-comment thread when we know its id;
+  // otherwise fall back to the PR itself.
+  const commentUrl = prUrl
+    ? finding.githubCommentId != null
+      ? `${prUrl}#discussion_r${finding.githubCommentId}`
+      : prUrl
+    : null;
   const loc = finding.line != null ? `${finding.file} : ${finding.line}` : finding.file;
   return (
     <div className="row-in mb-6" style={{ animationDelay: `${delay}s` }}>
@@ -54,14 +70,21 @@ export function FindingCard({ finding, delay = 0 }: { finding: Finding; delay?: 
               {finding.fix}
             </div>
           )}
-          <div className="mt-3 flex gap-1.5">
-            <button className="rounded border border-lapis-wash bg-lapis-wash px-2 py-0.5 text-[11px] font-semibold text-lapis hover:bg-[#dbe5f3]">
-              Apply suggestion
-            </button>
-            <button className="rounded border border-line-2 px-2 py-0.5 text-[11px] font-semibold text-ink-2 hover:border-ink-3">
-              Dismiss
-            </button>
-          </div>
+          {/* Acting on a finding (applying the suggestion, resolving the
+              thread) is GitHub's job — link to the exact comment instead of
+              faking those actions here. */}
+          {finding.wasPosted && commentUrl && (
+            <div className="mt-3">
+              <a
+                href={commentUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 rounded border border-lapis-wash bg-lapis-wash px-2 py-0.5 text-[11px] font-semibold text-lapis no-underline hover:bg-[#dbe5f3]"
+              >
+                ↗ View on PR
+              </a>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -7,6 +7,7 @@ import { TraceStepItem } from "@/components/trace-step";
 
 export function ReviewTabs({ review }: { review: ReviewDetail }) {
   const [tab, setTab] = useState<"findings" | "trace">("findings");
+  const prUrl = `https://github.com/${review.repo}/pull/${review.prNumber}`;
   return (
     <>
       <div className="mb-5 flex gap-0.5 border-b border-line-2" role="tablist">
@@ -38,7 +39,7 @@ export function ReviewTabs({ review }: { review: ReviewDetail }) {
             </p>
           ) : (
             review.findingsList.map((f, i) => (
-              <FindingCard key={f.id} finding={f} delay={0.03 + i * 0.06} />
+              <FindingCard key={f.id} finding={f} prUrl={prUrl} delay={0.03 + i * 0.06} />
             ))
           )}
         </div>
