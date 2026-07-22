@@ -77,7 +77,7 @@ async def main():
     logger.info(
         "worker_starting",
         queue=REVIEW_QUEUE_NAME,
-        concurrency=settings.worker_concurrency,
+        concurrency=settings.concurrency,
         mock_llm=settings.mock_llm,
         redis_host=connection["host"],
         redis_port=connection["port"],
@@ -89,7 +89,7 @@ async def main():
         process_job,
         {
             "connection": connection,
-            "concurrency": settings.worker_concurrency
+            "concurrency": settings.concurrency
         }
     )
 
