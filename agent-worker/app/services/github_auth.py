@@ -11,17 +11,13 @@ GITHUB_API_BASE = "https://api.github.com"
 
 
 def _clean_private_key(key: str) -> str:
-    """
-    Ensures the private key has proper PEM formatting.
-    Handles cases where newlines are stored as literal \n strings.
-    """
-    # If key contains literal \n strings, replace with real newlines
     if "\\n" in key:
         key = key.replace("\\n", "\n")
 
-    # If key is all on one line (no newlines), reformat it
-    if "\n" not in key:
-        # Extract the base64 content between headers
+    has_header = "-----BEGIN" in key
+
+    if not has_header:
+        # Strip any stray header/footer fragments and whitespace, then rewrap
         key = key.replace(
             "-----BEGIN RSA PRIVATE KEY-----", ""
         ).replace(
@@ -30,9 +26,8 @@ def _clean_private_key(key: str) -> str:
             "-----BEGIN PRIVATE KEY-----", ""
         ).replace(
             "-----END PRIVATE KEY-----", ""
-        ).strip()
+        ).replace("\n", "").strip()
 
-        # Reformat with proper line breaks every 64 chars
         chunks = [key[i:i+64] for i in range(0, len(key), 64)]
         key = (
             "-----BEGIN RSA PRIVATE KEY-----\n" +
