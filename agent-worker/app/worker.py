@@ -1,5 +1,6 @@
 import asyncio
 import structlog
+from urllib.parse import urlparse
 from bullmq import Worker
 
 from app.config import get_settings
@@ -56,25 +57,39 @@ async def main():
     setup_logging()
     settings = get_settings()
 
-    redis_host = settings.redis_url.replace("redis://", "").split(":")[0]
-    redis_port = int(settings.redis_url.replace("redis://", "").split(":")[1])
+    # Parse the full Redis URL properly — production URLs from Railway et al
+    # carry credentials and sometimes use TLS, e.g.
+    #   redis://default:PASSWORD@redis.railway.internal:6379
+    #   rediss://default:PASSWORD@host:6380
+    # The old str.split approach only worked for bare redis://host:port.
+    parsed = urlparse(settings.redis_url)
+    connection: dict = {
+        "host": parsed.hostname or "localhost",
+        "port": parsed.port or 6379,
+    }
+    if parsed.password:
+        connection["password"] = parsed.password
+    if parsed.username:
+        connection["username"] = parsed.username
+    if parsed.scheme == "rediss":
+        connection["tls"] = {}
 
     logger.info(
         "worker_starting",
         queue=REVIEW_QUEUE_NAME,
-        concurrency=settings.concurrency,
-        mock_llm=settings.mock_llm
+        concurrency=settings.worker_concurrency,
+        mock_llm=settings.mock_llm,
+        redis_host=connection["host"],
+        redis_port=connection["port"],
+        redis_tls=parsed.scheme == "rediss",
     )
 
     worker = Worker(
         REVIEW_QUEUE_NAME,
         process_job,
         {
-            "connection": {
-                "host": redis_host,
-                "port": redis_port
-            },
-            "concurrency": settings.concurrency
+            "connection": connection,
+            "concurrency": settings.worker_concurrency
         }
     )
 

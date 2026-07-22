@@ -1,5 +1,6 @@
 import json
 import structlog
+from urllib.parse import urlparse
 from bullmq import Queue
 from app.config import get_settings
 
@@ -11,13 +12,28 @@ _queue: Queue | None = None
 
 
 def _get_redis_opts(redis_url: str) -> dict:
-    """Parses redis URL into host/port dict for BullMQ."""
-    stripped = redis_url.replace("redis://", "")
-    parts = stripped.split(":")
-    return {
-        "host": parts[0],
-        "port": int(parts[1]) if len(parts) > 1 else 6379
+    """
+    Parse a Redis URL into a BullMQ-compatible connection dict.
+
+    Handles the full production shape used by Railway/Heroku/etc:
+      redis://default:PASSWORD@host:port
+      rediss://default:PASSWORD@host:port   (TLS)
+    The prior implementation split on ':' and only worked for the bare
+    dev URL redis://localhost:6379 — real URLs blew up with a ValueError
+    trying to parse the password as an int.
+    """
+    parsed = urlparse(redis_url)
+    opts: dict = {
+        "host": parsed.hostname or "localhost",
+        "port": parsed.port or 6379,
     }
+    if parsed.password:
+        opts["password"] = parsed.password
+    if parsed.username:
+        opts["username"] = parsed.username
+    if parsed.scheme == "rediss":
+        opts["tls"] = {}
+    return opts
 
 
 async def get_queue() -> Queue:
