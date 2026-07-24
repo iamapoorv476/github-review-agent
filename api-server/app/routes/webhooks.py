@@ -277,6 +277,9 @@ async def _handle_review_trigger(
             base_branch = pr_state["base_branch"]
             head_branch = pr_state["head_branch"]
             github_pr_id = pr_state["github_pr_id"]
+            files_changed = pr_state.get("files_changed", 0)
+            lines_added = pr_state.get("lines_added", 0)
+            lines_removed = pr_state.get("lines_removed", 0)
             try:
                 pr_opened_at = datetime.fromisoformat(
                     pr_state["pr_opened_at"].replace("Z", "+00:00")
@@ -310,6 +313,9 @@ async def _handle_review_trigger(
         base_branch = pr_data.get("base", {}).get("ref", "")
         head_branch = pr_data.get("head", {}).get("ref", "")
         github_pr_id = pr_data.get("id", 0)
+        files_changed = pr_data.get("changed_files", 0)
+        lines_added = pr_data.get("additions", 0)
+        lines_removed = pr_data.get("deletions", 0)
         pr_opened_at_str = pr_data.get("created_at", "")
         try:
             pr_opened_at = datetime.fromisoformat(
@@ -444,7 +450,10 @@ async def _handle_review_trigger(
         base_branch=base_branch,
         head_branch=head_branch,
         head_sha=head_sha,
-        pr_opened_at=pr_opened_at
+        pr_opened_at=pr_opened_at,
+        files_changed=files_changed,
+        lines_added=lines_added,
+        lines_removed=lines_removed,
     )
 
     # ----------------------------------------------------------------

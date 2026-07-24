@@ -92,7 +92,10 @@ async def fetch_pr_current_state(
             "base_branch": data["base"]["ref"],
             "head_branch": data["head"]["ref"],
             "github_pr_id": data["id"],
-            "pr_opened_at": data["created_at"]
+            "pr_opened_at": data["created_at"],
+            "files_changed": data.get("changed_files", 0),
+            "lines_added": data.get("additions", 0),
+            "lines_removed": data.get("deletions", 0),
         }
 
     except Exception as e:
