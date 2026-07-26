@@ -7,7 +7,7 @@ comments mapped to exact diff positions, and **every finding arrives with the fu
 reasoning trace that produced it**: each thought, every tool call, every file the agent
 opened.
 
-**Live demo:** [github-review-agent.vercel.app](https://github-review-agent.vercel.app) ·
+**Live demo:** [https://www.prpilot.co/](https://www.prpilot.co/) ·
 **Install:** the "Install on GitHub" button on the landing page
 
 ---
