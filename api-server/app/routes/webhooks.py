@@ -18,6 +18,7 @@ from app.services.installation_repository import (
     upsert_installation,
     get_installation_by_github_id,
 )
+from app.services.api_key import ensure_api_key
 from app.services.repository_repository import (
     upsert_repository,
     register_repositories_from_install,
@@ -129,6 +130,10 @@ async def _handle_installation_created(
         account_avatar_url=account.get("avatar_url"),
         installed_at=datetime.now(timezone.utc)
     )
+
+    # Issue the API key now so it's ready by the time the browser lands on
+    # /welcome (which calls by-github-id and reads it).
+    await ensure_api_key(db, installation)
 
     # Register the repos selected during install so /welcome shows the true
     # selection immediately, instead of waiting for the first PR (lazy path).

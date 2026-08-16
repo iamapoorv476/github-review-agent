@@ -1,254 +1,402 @@
 """
-Marginalia MCP server — query your code reviews from Claude.
- 
-Read-only, v1. This server is a thin client of the Marginalia dashboard
-API: it never touches the database directly and never calls a model.
-Model inference (and its token cost) happens on the MCP *client* side
-(Claude Desktop / Claude Code), covered by the user's subscription.
- 
-Run (stdio, for Claude Desktop):
-    MARGINALIA_API_URL=https://your-api.up.railway.app python server.py
- 
-Debug without a model:
-    npx @modelcontextprotocol/inspector python server.py
- 
-Deliberate non-goals for v1 (documented, not forgotten):
-  - No writes (settings, re-review triggers) — read-only by design.
-  - No cross-review findings search — the dashboard API has no findings
-    query endpoint yet; add one there first, then a tool here.
+Marginalia MCP Server
+Exposes GitHub Review Agent data to Claude via Model Context Protocol.
+Connect with: MARGINALIA_API_KEY=gra_xxx python mcp_server.py
 """
 
 import os
-from datetime import datetime, timezone
-
+import json
 import httpx
-from mcp.server.mcpserver import MCPServer
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
 
-API_BASE = os.environ.get("MARGINALIA_API_URL", "http://localhost:8000").rstrip("/")
-
-mcp = MCPServer(
-    "marginalia",
-    instructions=(
-        "Tools for querying Marginalia, an AI code-review agent for GitHub. "
-        "Use list_reviews to discover reviews, get_review for findings on a"
-        "specific PR, get _reasoning_trace to see WHY the agent concluded what"
-        "it did, get_stats for account totals and spend, and list_repos for"
-        "connected repositories. Repos are always 'owner/name'."
-    ),
+API_BASE = os.environ.get(
+    "MARGINALIA_API_URL",
+    "http://localhost:8000"
 )
+API_KEY = os.environ.get("MARGINALIA_API_KEY", "")
 
-# ---------------------------------------------------------------- helpers
+app = Server("marginalia")
 
-async def _get(path: str, params: dict | None = None):
-    async with httpx.AsyncClient(timeout=15) as client:
 
-        r = await client.get(f"{API_BASE}{path}", params=params)
-        r.raise_for_status()
-        return r.json()
+def get_headers() -> dict:
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["Authorization"] = f"Bearer {API_KEY}"
+    return headers
 
-def _ago(iso : str | None) -> str:
-    """Humanized time with the ISO date kept for precision."""
-    if not iso:
-        return "-"
-    try:
-        then = datetime.fromisoformat(iso.replace("Z","+00:00"))
-    except ValueError:
-        return iso
-    s= int((datetime.now(timezone.utc) - then).total_seconds())
-    if s < 3600:
-        human = f"{max(1, s // 60)}m ago"
-    elif s < 86400:
-        human = f"{s // 3600}h ago"
-    else:
-        human = f"{s // 86400}d ago"
-    return f"{human} ({then.date().isoformat()})"
 
-def _duration(ms : int | None) -> str:
-    if ms is None:
-        return "-"
-    sec = round(ms / 1000)
-    return f"{sec // 60}m {sec % 60:02d}s"
-
-def _verdict(r: dict) -> str:
-    """Mirror the dashboard's verdict derivation (lib/data.ts contract)."""
-    if r["status"] in ("queued", "processing"):
-        return "running"
-    if r["status"] in ("failed", "cancelled"):
-        return r["status"]
-    if r["critical_count"] > 0:
-        return "changes requested"
-    return "commented" if r["findings_count"] > 0 else "approved"
-
-def _sev_line(r: dict) -> str:
-    parts = [
-        f"{r[k]} {label}"
-        for k, label in [
-            ("critical_count", "critical"),
-            ("high_count", "warning"),
-            ("medium_count", "suggestion"),
-            ("low_count", "nit"),
-        ]
-        if r[k]
-    ]
-    return ", ".join(parts) if parts else "no findings"
-
-def _review_row(r: dict) -> str:
-    pr = r["pull_request"]
-    return (
-        f"- {r['repository']['full_name']} PR #{pr['pr_number']} — "
-        f"\"{pr['title']}\" · {_verdict(r)} · {_sev_line(r)} · "
-        f"{_duration(r['duration_ms'])} · {_ago(r['completed_at'] or r['queued_at'])} · "
-        f"review_id={r['id']}"
-    )
-
-async def _resolve_review_id(
-    review_id: str, repo: str, pr_number: int
-) -> str | None:
-    """
-    Humans think in PR numbers; the API thinks in UUIDs. Given either,
-    return a UUID (newest run wins when a PR has several), or None.
-    """
-    if review_id:
-        return review_id
-
-    if not (repo and pr_number):
-        return None
-    data = await _get("/api/reviews", {"repo": repo, "limit": 100, "offset": 0})
-    for r in data["items"]:  # newest first — first match is latest run
-        if r["pull_request"]["pr_number"] == pr_number:
-            return r["id"]
-    return None
-
-@mcp.tool()
-async def list_reviews(repo: str = "", status: str = "", limit: int = 10) -> str:
-    """List recent Marginalia code reviews, newest first. Use this first to
-    discover reviews (and their review_id) before fetching findings or a
-    reasoning trace. Filter by repo ("owner/name") and/or status (queued,
-    processing, completed, failed). Returns at most `limit` rows (default 10,
-    max 25)."""
-    params: dict = {"limit": min(max(limit, 1), 25), "offset": 0}
-    if repo:
-        params["repo"] = repo
-    if status:
-        params["status"] = status
-    data = await _get("/api/reviews", params)
-    if not data["items"]:
-        scope = f" for {repo}" if repo else ""
-        return f"No reviews found{scope}."
-    rows = "\n".join(_review_row(r) for r in data["items"])
-    return f"{data['total']} reviews total, showing {len(data['items'])}:\n{rows}"
- 
-@mcp.tool()
-async def get_review(repo: str = "", pr_number: int = 0, review_id: str = "") -> str:
-    """Get one review's verdict and findings. Identify the review either by
-    repo ("owner/name") + pr_number, or by review_id from list_reviews.
-    Returns each finding's severity, category, file:line, description, and
-    suggested fix — but NOT the reasoning trace (use get_reasoning_trace)."""
-    rid = await _resolve_review_id(review_id, repo, pr_number)
-    if rid is None:
-        return "Review not found — check repo ('owner/name') and pr_number, or pass review_id."
-    r = await _get(f"/api/reviews/{rid}")
-    pr = r["pull_request"]
-    head = (
-        f"{r['repository']['full_name']} PR #{pr['pr_number']} — \"{pr['title']}\" by {pr['author_login']}\n"
-        f"Verdict: {_verdict(r)} · {_sev_line(r)} · {pr['files_changed']} files "
-        f"(+{pr['lines_added']} −{pr['lines_removed']}) · reviewed {_ago(r['completed_at'])}\n"
-        f"Model {r['model_used'] or '—'} · {r['input_tokens'] + r['output_tokens']} tokens · "
-        f"{r['tool_calls_made']} tool calls · {len(r['reasoning_steps'])} reasoning steps"
-    )
-    if r.get("error_message"):
-        head += f"\nError: {r['error_message']}"
-    if not r["findings"]:
-        return head + "\n\nNo findings — clean pass."
-    ui_sev = {"critical": "CRITICAL", "high": "WARNING", "medium": "SUGGESTION", "low": "NIT"}
-    lines = []
-    for f in r["findings"]:
-        loc = f["file_path"] + (f":{f['line_number']}" if f["line_number"] else "")
-        entry = f"[{ui_sev.get(f['severity'], f['severity'])}] {loc} ({f['category']}) — {f['description']}"
-        if f.get("suggestion"):
-            entry += f"\n  fix: {f['suggestion']}"
-        if not f["was_posted"]:
-            entry += "\n  (not posted to the PR)"
-        lines.append(entry)
-    return head + "\n\nFindings:\n" + "\n".join(lines)
- 
-@mcp.tool()
-async def get_reasoning_trace(
-    repo: str = "", pr_number: int = 0, review_id: str = "", detail: str = "summary"
-) -> str:
-    """Show HOW the agent reached its conclusions on a review: each thought,
-    tool call, and observation, in order. Identify the review by repo +
-    pr_number or by review_id. detail="summary" (default) keeps each step to
-    one line; detail="full" includes complete thoughts and tool observations
-    — much longer, ask for it only when the user wants to go deep."""
-    rid = await _resolve_review_id(review_id, repo, pr_number)
-    if rid is None:
-        return "Review not found — check repo ('owner/name') and pr_number, or pass review_id."
-    r = await _get(f"/api/reviews/{rid}")
-    steps = r["reasoning_steps"]
-    if not steps:
-        return "No reasoning trace was captured for this review."
-    pr = r["pull_request"]
-    head = (
-        f"Reasoning trace — {r['repository']['full_name']} PR #{pr['pr_number']} "
-        f"({len(steps)} steps, {r['tool_calls_made']} tool calls):"
-    )
-    lines = []
-    for s in sorted(steps, key=lambda x: x["step_number"]):
-        kind = s["step_type"]
-        if detail == "full":
-            body = s["content"]
-            if s.get("tool_name"):
-                body += f"\n   → {s['tool_name']}({s.get('tool_input') or ''})"
-            if s.get("tool_output_summary"):
-                body += f"\n   ← {s['tool_output_summary']}"
-        else:
-            first = s["content"].split(". ")[0][:120]
-            body = first + (f" → {s['tool_name']}" if s.get("tool_name") else "")
-        lines.append(f"{s['step_number']}. [{kind}] {body}")
-    return head + "\n" + "\n".join(lines)
- 
- 
-@mcp.tool()
-async def get_stats() -> str:
-    """Account-wide Marginalia stats: total reviews (completed/failed/running),
-    findings by severity, median review time, total LLM spend, and how many
-    repos are actively reviewed. Use for questions about overall activity,
-    quality, or cost."""
-    s = await _get("/api/stats")
-    sev = s["findings_by_severity"]
-    return (
-        f"Reviews: {s['reviews_total']} total — {s['reviews_completed']} completed, "
-        f"{s['reviews_failed']} failed, {s['reviews_running']} running\n"
-        f"Findings: {s['findings_total']} — {sev['critical']} critical, {sev['high']} warning, "
-        f"{sev['medium']} suggestion, {sev['low']} nit\n"
-        f"Median review time: {_duration(s['median_review_ms'])}\n"
-        f"Spend to date: ${s['total_cost_usd']:.2f} ({s['total_tokens']} tokens)\n"
-        f"Active repos: {s['repos_active']}"
-    )
- 
-@mcp.tool()
-async def list_repos() -> str:
-    """List repositories connected to Marginalia with their review state:
-    enabled/paused, total reviews and findings to date, last review time, and
-    the finding categories enabled for the account. Use for 'what's
-    connected?' and 'which repo has the most findings?'."""
-    repos = await _get("/api/repos")
-    if not repos:
-        return "No repositories connected yet."
-    lines = []
-    for r in sorted(repos, key=lambda x: -x["total_findings"]):
-        state = "active" if r["review_enabled"] else "paused"
-        lines.append(
-            f"- {r['full_name']} ({state}) — {r['total_reviews']} reviews, "
-            f"{r['total_findings']} findings, last reviewed {_ago(r['last_reviewed_at'])} · "
-            f"categories: {', '.join(r['review_categories'])}"
+async def api_get(path: str, params: dict = None) -> dict:
+    """Make authenticated GET request to Marginalia API."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(
+            f"{API_BASE}{path}",
+            headers=get_headers(),
+            params=params or {}
         )
-    return f"{len(repos)} connected repositories:\n" + "\n".join(lines)
- 
- 
+        if response.status_code == 401:
+            raise ValueError(
+                "Invalid API key. Set MARGINALIA_API_KEY=gra_xxx"
+            )
+        if response.status_code == 404:
+            raise ValueError(f"Not found: {path}")
+        response.raise_for_status()
+        return response.json()
+
+
+@app.list_tools()
+async def list_tools() -> list[Tool]:
+    return [
+        Tool(
+            name="list_reviews",
+            description=(
+                "List pull request reviews. Returns review history "
+                "with verdict, findings count, timing, and PR details. "
+                "Use this to get an overview of reviewed PRs."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of reviews to return (default 20, max 100)",
+                        "default": 20
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "Filter by status: completed, failed, processing, queued",
+                        "enum": ["completed", "failed", "processing", "queued"]
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Filter by repo full name e.g. 'owner/repo'"
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="get_review",
+            description=(
+                "Get full details of a single review run including "
+                "all findings and the complete agent reasoning trace. "
+                "Use this when you need to understand why the agent "
+                "flagged something or see the full reasoning."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "review_run_id": {
+                        "type": "string",
+                        "description": "UUID of the review run"
+                    }
+                },
+                "required": ["review_run_id"]
+            }
+        ),
+        Tool(
+            name="get_stats",
+            description=(
+                "Get aggregate statistics: total reviews, findings surfaced, "
+                "median review time, spend to date, critical issue count. "
+                "Use this for a high-level health check."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        Tool(
+            name="list_repos",
+            description=(
+                "List repositories where the GitHub App is installed. "
+                "Shows review count and last reviewed date per repo."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        Tool(
+            name="list_findings",
+            description=(
+                "List security and code quality findings across all reviews. "
+                "Filter by severity (critical/high/medium/low), category "
+                "(security/performance/quality), or repository. "
+                "Use this to find all critical security issues across repos."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "severity": {
+                        "type": "string",
+                        "description": "Filter by severity",
+                        "enum": ["critical", "high", "medium", "low"]
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Filter by category",
+                        "enum": ["security", "performance", "quality"]
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Filter by repo full name e.g. 'owner/repo'"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of findings to return (default 50)",
+                        "default": 50
+                    }
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="get_reasoning_trace",
+            description=(
+                "Get the full step-by-step reasoning trace for a specific review. "
+                "Shows every thought, tool call, and observation the agent made. "
+                "Use this to audit why the agent reached a specific conclusion "
+                "or to understand the agent's decision-making process."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "review_run_id": {
+                        "type": "string",
+                        "description": "UUID of the review run to get the trace for"
+                    }
+                },
+                "required": ["review_run_id"]
+            }
+        ),
+    ]
+
+
+@app.call_tool()
+async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    try:
+        if name == "list_reviews":
+            params = {}
+            if arguments.get("limit"):
+                params["limit"] = arguments["limit"]
+            if arguments.get("status"):
+                params["status"] = arguments["status"]
+            if arguments.get("repo"):
+                params["repo"] = arguments["repo"]
+
+            data = await api_get("/api/reviews", params)
+            reviews = data.get("reviews", data if isinstance(data, list) else [])
+
+            if not reviews:
+                return [TextContent(type="text", text="No reviews found.")]
+
+            lines = [f"Found {len(reviews)} reviews:\n"]
+            for r in reviews:
+                verdict = r.get("verdict", "unknown")
+                findings = r.get("findings_count", 0)
+                duration = r.get("duration_ms", 0)
+                duration_str = (
+                    f"{duration // 60000}m {(duration % 60000) // 1000}s"
+                    if duration else "—"
+                )
+                lines.append(
+                    f"• [{verdict.upper()}] PR #{r.get('pr_number')} — "
+                    f"{r.get('pr_title', 'untitled')} "
+                    f"({r.get('repo_full_name', '')}) "
+                    f"| {findings} findings | {duration_str} "
+                    f"| id: {r.get('id')}"
+                )
+
+            return [TextContent(type="text", text="\n".join(lines))]
+
+        elif name == "get_review":
+            review_run_id = arguments.get("review_run_id")
+            if not review_run_id:
+                return [TextContent(type="text", text="review_run_id is required")]
+
+            data = await api_get(f"/api/reviews/{review_run_id}")
+
+            lines = [
+                f"Review: {data.get('pr_title')} (PR #{data.get('pr_number')})",
+                f"Repo: {data.get('repo_full_name')}",
+                f"Status: {data.get('status')}",
+                f"Verdict: {data.get('verdict')}",
+                f"Findings: {data.get('findings_count')} "
+                f"({data.get('critical_count')} critical, "
+                f"{data.get('high_count')} high, "
+                f"{data.get('medium_count')} medium, "
+                f"{data.get('low_count')} low)",
+                f"Duration: {data.get('duration_ms', 0) // 1000}s",
+                f"Model: {data.get('model_used')}",
+                f"Tokens: {data.get('input_tokens', 0) + data.get('output_tokens', 0)}",
+                f"Cost: ${data.get('total_cost_usd', 0):.4f}",
+                ""
+            ]
+
+            findings = data.get("findings", [])
+            if findings:
+                lines.append(f"Findings ({len(findings)}):")
+                for f in findings:
+                    lines.append(
+                        f"  [{f.get('severity', '').upper()}] "
+                        f"{f.get('title')} "
+                        f"— {f.get('file_path')}:{f.get('line_number')}"
+                    )
+                    lines.append(
+                        f"    {f.get('description', '')[:150]}"
+                    )
+
+            return [TextContent(type="text", text="\n".join(lines))]
+
+        elif name == "get_stats":
+            data = await api_get("/api/stats")
+
+            median_ms = data.get("median_review_time_ms", 0)
+            median_str = (
+                f"{median_ms // 60000}m {(median_ms % 60000) // 1000}s"
+                if median_ms else "—"
+            )
+
+            text = (
+                f"Marginalia Stats\n"
+                f"{'─' * 30}\n"
+                f"Total reviews:      {data.get('total_reviews', 0)}\n"
+                f"Findings surfaced:  {data.get('total_findings', 0)}\n"
+                f"  Critical:         {data.get('critical_count', 0)}\n"
+                f"  High:             {data.get('high_count', 0)}\n"
+                f"Median review time: {median_str}\n"
+                f"Spend to date:      ${data.get('total_cost_usd', 0):.4f}\n"
+                f"Active repos:       {data.get('active_repos', 0)}\n"
+            )
+            return [TextContent(type="text", text=text)]
+
+        elif name == "list_repos":
+            data = await api_get("/api/repos")
+            repos = data.get("repos", data if isinstance(data, list) else [])
+
+            if not repos:
+                return [TextContent(type="text", text="No repositories found.")]
+
+            lines = [f"Repositories ({len(repos)}):\n"]
+            for r in repos:
+                last = r.get("last_reviewed_at", "never")
+                lines.append(
+                    f"• {r.get('full_name')} "
+                    f"— {r.get('total_reviews', 0)} reviews, "
+                    f"{r.get('total_findings', 0)} findings "
+                    f"| last reviewed: {last}"
+                )
+
+            return [TextContent(type="text", text="\n".join(lines))]
+
+        elif name == "list_findings":
+            params = {}
+            if arguments.get("severity"):
+                params["severity"] = arguments["severity"]
+            if arguments.get("category"):
+                params["category"] = arguments["category"]
+            if arguments.get("repo"):
+                params["repo"] = arguments["repo"]
+            params["limit"] = arguments.get("limit", 50)
+
+            data = await api_get("/api/findings", params)
+            findings = data.get("findings", data if isinstance(data, list) else [])
+
+            if not findings:
+                return [TextContent(
+                    type="text",
+                    text="No findings match the given filters."
+                )]
+
+            lines = [f"Found {len(findings)} findings:\n"]
+            for f in findings:
+                lines.append(
+                    f"• [{f.get('severity', '').upper()}] "
+                    f"{f.get('category', '')} — {f.get('title')}"
+                )
+                lines.append(
+                    f"  {f.get('file_path')}:{f.get('line_number')} "
+                    f"(PR #{f.get('pr_number')} in {f.get('repo_full_name')})"
+                )
+                lines.append(f"  {f.get('description', '')[:150]}")
+                lines.append("")
+
+            return [TextContent(type="text", text="\n".join(lines))]
+
+        elif name == "get_reasoning_trace":
+            review_run_id = arguments.get("review_run_id")
+            if not review_run_id:
+                return [TextContent(
+                    type="text",
+                    text="review_run_id is required"
+                )]
+
+            data = await api_get(f"/api/reviews/{review_run_id}/trace")
+            steps = data.get("steps", [])
+
+            if not steps:
+                return [TextContent(
+                    type="text",
+                    text="No reasoning trace found for this review."
+                )]
+
+            lines = [
+                f"Reasoning trace — {len(steps)} steps",
+                f"PR: {data.get('pr_title')} (#{data.get('pr_number')})",
+                f"Repo: {data.get('repo_full_name')}\n"
+            ]
+
+            for step in steps:
+                step_type = step.get("step_type", "").upper()
+                content = step.get("content", "")[:300]
+                tool = step.get("tool_name")
+
+                if tool:
+                    lines.append(
+                        f"[{step.get('step_number')}] {step_type} → {tool}"
+                    )
+                    if step.get("tool_input"):
+                        lines.append(
+                            f"    input: {json.dumps(step['tool_input'])[:100]}"
+                        )
+                else:
+                    lines.append(f"[{step.get('step_number')}] {step_type}")
+
+                lines.append(f"    {content}")
+                lines.append("")
+
+            return [TextContent(type="text", text="\n".join(lines))]
+
+        else:
+            return [TextContent(
+                type="text",
+                text=f"Unknown tool: {name}"
+            )]
+
+    except ValueError as e:
+        return [TextContent(type="text", text=f"Error: {e}")]
+    except httpx.HTTPStatusError as e:
+        return [TextContent(
+            type="text",
+            text=f"API error {e.response.status_code}: {e.response.text[:200]}"
+        )]
+    except Exception as e:
+        return [TextContent(type="text", text=f"Unexpected error: {e}")]
+
+
+async def main():
+    async with stdio_server() as (read_stream, write_stream):
+        await app.run(
+            read_stream,
+            write_stream,
+            app.create_initialization_options()
+        )
+
+
 if __name__ == "__main__":
-    mcp.run()  # stdio transport — what Claude Desktop launches
- 
- 
-    
+    import asyncio
+    asyncio.run(main())

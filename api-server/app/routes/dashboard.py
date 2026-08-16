@@ -1,413 +1,618 @@
-"""
-Dashboard read API — serves marginalia-web (Next.js, Phase 5).
-
-Four endpoint groups, matching lib/data.ts fetchers one-to-one:
-
-    GET   /api/stats                     → getStats()
-    GET   /api/reviews                   → getReviews()
-    GET   /api/reviews/{id}              → getReview(id)
-    GET   /api/repos                     → getRepoSettings()
-    PATCH /api/repos/{id}                → saveRepoSettings()
-    PATCH /api/installations/{id}        → org-level toggles
-
-All endpoints are read-mostly and unauthenticated for local development.
-Before deploying, put these behind your dashboard auth (session cookie
-or a shared token) — they expose review content for every tenant.
-"""
 import uuid
-from typing import Optional
-
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from datetime import datetime, timezone
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy import select, func, case
 
 from app.database import get_db_session
-from app.models import (
-    Finding,
-    Installation,
-    PullRequest,
-    ReasoningStep,
-    ReviewRun,
-    Repository,
-)
-from app.schemas.dashboard import (
-    FindingOut,
-    InstallationSettingsUpdate,
-    PullRequestRef,
-    ReasoningStepOut,
-    RepoRef,
-    RepoSettings,
-    RepoSettingsUpdate,
-    ReviewDetail,
-    ReviewListResponse,
-    ReviewSummary,
-    SeverityBreakdown,
-    StatsResponse,
-)
+from app.models.installation import Installation
+from app.models.repository import Repository
+from app.models.pull_request import PullRequest
+from app.models.review_run import ReviewRun
+from app.models.finding import Finding
+from app.models.reasoning_step import ReasoningStep
 
 logger = structlog.get_logger()
-router = APIRouter(prefix="/api", tags=["dashboard"])
+router = APIRouter(tags=["dashboard"])
 
 
-# ---------------------------------------------------------------- helpers
+# ─────────────────────────────────────────────
+# Auth dependency (optional — imported from middleware)
+# ─────────────────────────────────────────────
+async def optional_installation(
+    request=None,
+    db: AsyncSession = Depends(get_db_session),
+) -> Optional[Installation]:
+    """
+    Returns Installation if a valid Bearer gra_... key is present,
+    None otherwise (public / demo mode).
+    """
+    from fastapi import Request
+    from app.services.api_key import resolve_api_key
 
-def _review_summary_kwargs(run: ReviewRun, step_count: int = 0) -> dict:
-    """Shared field mapping for ReviewSummary and ReviewDetail."""
-    return dict(
-        id=run.id,
-        status=run.status,
-        trigger=run.trigger,
-        triggered_by=run.triggered_by,
-        queued_at=run.queued_at,
-        started_at=run.started_at,
-        completed_at=run.completed_at,
-        duration_ms=run.duration_ms,
-        model_used=run.model_used,
-        input_tokens=run.input_tokens,
-        output_tokens=run.output_tokens,
-        total_cost_usd=float(run.total_cost_usd) if run.total_cost_usd is not None else None,
-        tool_calls_made=run.tool_calls_made,
-        findings_count=run.findings_count,
-        critical_count=run.critical_count,
-        high_count=run.high_count,
-        medium_count=run.medium_count,
-        low_count=run.low_count,
-        reasoning_step_count=step_count,
-        review_comment_url=run.review_comment_url,
-        pull_request=PullRequestRef.model_validate(run.pull_request),
-        repository=RepoRef.model_validate(run.pull_request.repository),
-    )
+    if request is None:
+        return None
+
+    auth = request.headers.get("Authorization", "")
+    if not auth:
+        return None
+
+    scheme, _, token = auth.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(
+            status_code=401,
+            detail="Expected 'Authorization: Bearer <api key>'"
+        )
+
+    installation = await resolve_api_key(db, token.strip())
+    if installation is None:
+        logger.warning("api_key_rejected", key_prefix=token.strip()[:8])
+        raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+
+    return installation
 
 
+# ─────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────
 def _parse_uuid(value: str, what: str) -> uuid.UUID:
     try:
         return uuid.UUID(value)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid {what} id")
-
-
-# ---------------------------------------------------------------- stats
-
-@router.get("/stats", response_model=StatsResponse)
-async def get_stats(db: AsyncSession = Depends(get_db_session)):
-    """Aggregate numbers for the dashboard header strip."""
-
-    status_rows = (await db.execute(
-        select(ReviewRun.status, func.count())
-        .group_by(ReviewRun.status)
-    )).all()
-    by_status = {status: count for status, count in status_rows}
-
-    severity_rows = (await db.execute(
-        select(Finding.severity, func.count())
-        .group_by(Finding.severity)
-    )).all()
-    by_severity = {sev: count for sev, count in severity_rows}
-
-    median_ms = (await db.execute(
-        select(
-            func.percentile_cont(0.5).within_group(ReviewRun.duration_ms)
-        ).where(
-            ReviewRun.status == "completed",
-            ReviewRun.duration_ms.isnot(None),
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid {what}: {value!r}"
         )
-    )).scalar_one_or_none()
-
-    totals = (await db.execute(
-        select(
-            func.coalesce(func.sum(ReviewRun.total_cost_usd), 0),
-            func.coalesce(
-                func.sum(ReviewRun.input_tokens + ReviewRun.output_tokens), 0
-            ),
-        )
-    )).one()
-
-    repos_active = (await db.execute(
-        select(func.count()).select_from(Repository)
-        .where(Repository.review_enabled.is_(True))
-    )).scalar_one()
-
-    return StatsResponse(
-        reviews_total=sum(by_status.values()),
-        reviews_completed=by_status.get("completed", 0),
-        reviews_failed=by_status.get("failed", 0),
-        reviews_running=by_status.get("queued", 0) + by_status.get("processing", 0),
-        findings_total=sum(by_severity.values()),
-        findings_by_severity=SeverityBreakdown(
-            critical=by_severity.get("critical", 0),
-            high=by_severity.get("high", 0),
-            medium=by_severity.get("medium", 0),
-            low=by_severity.get("low", 0),
-        ),
-        median_review_ms=int(median_ms) if median_ms is not None else None,
-        repos_active=repos_active,
-        total_cost_usd=float(totals[0]),
-        total_tokens=int(totals[1]),
-    )
 
 
-# ---------------------------------------------------------------- reviews
+def _verdict(run: ReviewRun) -> str:
+    if run.status == "processing":
+        return "reviewing"
+    if run.status == "failed":
+        return "failed"
+    if run.status == "queued":
+        return "queued"
+    if run.findings_count == 0:
+        return "approved"
+    if run.critical_count > 0 or run.high_count > 0:
+        return "changes_requested"
+    return "commented"
 
-@router.get("/reviews", response_model=ReviewListResponse)
-async def list_reviews(
-    status: Optional[str] = Query(default=None, description="queued|processing|completed|failed|cancelled"),
-    repo: Optional[str] = Query(default=None, description="Repository full_name, e.g. acme/payments"),
-    severity: Optional[str] = Query(default=None, description="Only runs with ≥1 finding of this severity"),
-    limit: int = Query(default=25, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+
+def _duration_str(ms: Optional[int]) -> str:
+    if not ms:
+        return "0m 00s"
+    minutes = ms // 60000
+    seconds = (ms % 60000) // 1000
+    return f"{minutes}m {seconds:02d}s"
+
+
+# ─────────────────────────────────────────────
+# GET /api/stats
+# ─────────────────────────────────────────────
+@router.get("/api/stats")
+async def get_stats(
     db: AsyncSession = Depends(get_db_session),
+    installation: Optional[Installation] = Depends(optional_installation),
 ):
-    """Review history, newest first — powers the reviews ledger."""
+    """Aggregate dashboard metrics."""
 
-    filters = []
-    if status:
-        filters.append(ReviewRun.status == status)
-    if severity:
-        column = {
-            "critical": ReviewRun.critical_count,
-            "high": ReviewRun.high_count,
-            "medium": ReviewRun.medium_count,
-            "low": ReviewRun.low_count,
-        }.get(severity)
-        if column is None:
-            raise HTTPException(status_code=400, detail="Invalid severity filter")
-        filters.append(column > 0)
-
-    base = (
-        select(ReviewRun)
-        .join(ReviewRun.pull_request)
-        .join(PullRequest.repository)
-    )
-    if repo:
-        filters.append(Repository.full_name == repo)
-    if filters:
-        base = base.where(*filters)
-
-    total = (await db.execute(
-        select(func.count()).select_from(base.subquery())
-    )).scalar_one()
-
-    runs = (await db.execute(
-        base
-        .options(
-            selectinload(ReviewRun.pull_request)
-            .selectinload(PullRequest.repository)
+    base = select(ReviewRun)
+    if installation:
+        base = (
+            base
+            .join(PullRequest, ReviewRun.pull_request_id == PullRequest.id)
+            .join(Repository, PullRequest.repository_id == Repository.id)
+            .where(Repository.installation_id == installation.id)
         )
+
+    result = await db.execute(base)
+    runs = result.scalars().all()
+
+    total = len(runs)
+    running = sum(1 for r in runs if r.status == "processing")
+    failed = sum(1 for r in runs if r.status == "failed")
+    completed = [r for r in runs if r.status == "completed"]
+
+    total_findings = sum(r.findings_count or 0 for r in completed)
+    critical_count = sum(r.critical_count or 0 for r in completed)
+    high_count = sum(r.high_count or 0 for r in completed)
+    warning_count = high_count
+    suggestion_count = sum(r.low_count or 0 for r in completed)
+
+    durations = [r.duration_ms for r in completed if r.duration_ms]
+    median_ms = sorted(durations)[len(durations) // 2] if durations else 0
+
+    total_cost = sum(
+        float(r.total_cost_usd or 0) for r in completed
+    )
+
+    # Active repos
+    repo_query = select(func.count(Repository.id.distinct()))
+    if installation:
+        repo_query = repo_query.where(
+            Repository.installation_id == installation.id
+        )
+    repo_result = await db.execute(repo_query)
+    active_repos = repo_result.scalar() or 0
+
+    return {
+        "total_reviews": total,
+        "running": running,
+        "failed": failed,
+        "total_findings": total_findings,
+        "critical_count": critical_count,
+        "high_count": high_count,
+        "warning_count": warning_count,
+        "suggestion_count": suggestion_count,
+        "median_review_time_ms": median_ms,
+        "median_review_time": _duration_str(median_ms),
+        "total_cost_usd": round(total_cost, 4),
+        "active_repos": active_repos,
+    }
+
+
+# ─────────────────────────────────────────────
+# GET /api/reviews
+# ─────────────────────────────────────────────
+@router.get("/api/reviews")
+async def list_reviews(
+    limit: int = 20,
+    offset: int = 0,
+    status: Optional[str] = None,
+    repo: Optional[str] = None,
+    db: AsyncSession = Depends(get_db_session),
+    installation: Optional[Installation] = Depends(optional_installation),
+):
+    """List review runs with PR and repo metadata."""
+
+    query = (
+        select(ReviewRun, PullRequest, Repository)
+        .join(PullRequest, ReviewRun.pull_request_id == PullRequest.id)
+        .join(Repository, PullRequest.repository_id == Repository.id)
         .order_by(ReviewRun.queued_at.desc())
+    )
+
+    if installation:
+        query = query.where(Repository.installation_id == installation.id)
+    if status:
+        query = query.where(ReviewRun.status == status)
+    if repo:
+        query = query.where(Repository.full_name == repo)
+
+    # Reasoning step counts
+    step_counts_q = select(
+        ReasoningStep.review_run_id,
+        func.count(ReasoningStep.id).label("step_count")
+    ).group_by(ReasoningStep.review_run_id).subquery()
+
+    query = (
+        query
+        .outerjoin(
+            step_counts_q,
+            ReviewRun.id == step_counts_q.c.review_run_id
+        )
+        .add_columns(step_counts_q.c.step_count)
         .limit(limit)
         .offset(offset)
-    )).scalars().all()
-
-    # One grouped query for step counts across the page — avoids N+1
-    run_ids = [r.id for r in runs]
-    step_counts: dict = {}
-    if run_ids:
-        rows = (await db.execute(
-            select(ReasoningStep.review_run_id, func.count())
-            .where(ReasoningStep.review_run_id.in_(run_ids))
-            .group_by(ReasoningStep.review_run_id)
-        )).all()
-        step_counts = {rid: count for rid, count in rows}
-
-    return ReviewListResponse(
-        items=[
-            ReviewSummary(**_review_summary_kwargs(r, step_counts.get(r.id, 0)))
-            for r in runs
-        ],
-        total=total,
-        limit=limit,
-        offset=offset,
     )
 
+    result = await db.execute(query)
+    rows = result.all()
 
-@router.get("/reviews/{review_id}", response_model=ReviewDetail)
+    reviews = []
+    for row in rows:
+        run, pr, repo_obj = row[0], row[1], row[2]
+        step_count = row[3] or 0
+
+        reviews.append({
+            "id": str(run.id),
+            "status": run.status,
+            "verdict": _verdict(run),
+            "trigger": run.trigger,
+            "triggered_by": run.triggered_by,
+
+            # PR info
+            "pr_number": pr.pr_number,
+            "pr_title": pr.title,
+            "pr_author": pr.author_login,
+            "head_sha": pr.head_sha,
+
+            # Repo info
+            "repo_full_name": repo_obj.full_name,
+            "repo_owner": repo_obj.owner,
+            "repo_name": repo_obj.name,
+
+            # Findings
+            "findings_count": run.findings_count or 0,
+            "critical_count": run.critical_count or 0,
+            "high_count": run.high_count or 0,
+            "medium_count": run.medium_count or 0,
+            "low_count": run.low_count or 0,
+
+            # Timing & cost
+            "queued_at": run.queued_at.isoformat() if run.queued_at else None,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "duration_ms": run.duration_ms,
+            "duration_str": _duration_str(run.duration_ms),
+
+            # LLM
+            "model_used": run.model_used,
+            "input_tokens": run.input_tokens or 0,
+            "output_tokens": run.output_tokens or 0,
+            "total_cost_usd": float(run.total_cost_usd or 0),
+
+            # Trace
+            "reasoning_steps": step_count,
+            "files_changed": pr.files_changed or 0,
+
+            # GitHub
+            "github_review_id": run.github_review_id,
+            "review_comment_url": run.review_comment_url,
+            "error_message": run.error_message,
+            "retry_count": run.retry_count or 0,
+        })
+
+    return {"reviews": reviews, "total": len(reviews), "limit": limit, "offset": offset}
+
+
+# ─────────────────────────────────────────────
+# GET /api/reviews/{review_run_id}
+# ─────────────────────────────────────────────
+@router.get("/api/reviews/{review_run_id}")
 async def get_review(
-    review_id: str,
+    review_run_id: str,
     db: AsyncSession = Depends(get_db_session),
+    installation: Optional[Installation] = Depends(optional_installation),
 ):
-    """One review run with findings and the full reasoning trace."""
+    """Full review detail with findings."""
+    run_id = _parse_uuid(review_run_id, "review_run_id")
 
-    run_id = _parse_uuid(review_id, "review")
-
-    run = (await db.execute(
-        select(ReviewRun)
+    result = await db.execute(
+        select(ReviewRun, PullRequest, Repository)
+        .join(PullRequest, ReviewRun.pull_request_id == PullRequest.id)
+        .join(Repository, PullRequest.repository_id == Repository.id)
         .where(ReviewRun.id == run_id)
-        .options(
-            selectinload(ReviewRun.pull_request)
-            .selectinload(PullRequest.repository),
-            selectinload(ReviewRun.findings),
-            selectinload(ReviewRun.reasoning_steps),
-        )
-    )).scalar_one_or_none()
-
-    if run is None:
-        raise HTTPException(status_code=404, detail="Review not found")
-
-    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    findings = sorted(
-        run.findings,
-        key=lambda f: (severity_order.get(f.severity, 9), f.file_path, f.line_number or 0),
     )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Review run not found")
 
-    return ReviewDetail(
-        **_review_summary_kwargs(run, len(run.reasoning_steps)),
-        error_message=run.error_message,
-        retry_count=run.retry_count,
-        findings=[FindingOut.model_validate(f) for f in findings],
-        reasoning_steps=[
-            ReasoningStepOut.model_validate(s) for s in run.reasoning_steps
-        ],
+    run, pr, repo_obj = row
+
+    if installation and repo_obj.installation_id != installation.id:
+        raise HTTPException(status_code=404, detail="Review run not found")
+
+    # Findings
+    findings_result = await db.execute(
+        select(Finding)
+        .where(Finding.review_run_id == run_id)
+        .order_by(Finding.severity, Finding.file_path)
     )
+    findings = findings_result.scalars().all()
 
-
-# ---------------------------------------------------------------- repos
-
-def _repo_settings(repo: Repository) -> RepoSettings:
-    return RepoSettings(
-        id=repo.id,
-        installation_id=repo.installation_id,
-        full_name=repo.full_name,
-        owner=repo.owner,
-        name=repo.name,
-        is_private=repo.is_private,
-        default_branch=repo.default_branch,
-        review_enabled=repo.review_enabled,
-        total_reviews=repo.total_reviews,
-        total_findings=repo.total_findings,
-        last_reviewed_at=repo.last_reviewed_at,
-        account_login=repo.installation.account_login,
-        review_categories=repo.installation.review_categories,
+    # Reasoning steps
+    steps_result = await db.execute(
+        select(ReasoningStep)
+        .where(ReasoningStep.review_run_id == run_id)
+        .order_by(ReasoningStep.step_number)
     )
+    steps = steps_result.scalars().all()
 
-
-@router.get("/repos", response_model=list[RepoSettings])
-async def list_repos(db: AsyncSession = Depends(get_db_session)):
-    """All repositories with their settings — powers the settings page."""
-
-    repos = (await db.execute(
-        select(Repository)
-        .options(selectinload(Repository.installation))
-        .order_by(Repository.full_name)
-    )).scalars().all()
-
-    return [_repo_settings(r) for r in repos]
-
-
-@router.patch("/repos/{repo_id}", response_model=RepoSettings)
-async def update_repo(
-    repo_id: str,
-    body: RepoSettingsUpdate,
-    db: AsyncSession = Depends(get_db_session),
-):
-    """Toggle per-repo settings from the dashboard."""
-
-    rid = _parse_uuid(repo_id, "repository")
-
-    repo = (await db.execute(
-        select(Repository)
-        .where(Repository.id == rid)
-        .options(selectinload(Repository.installation))
-    )).scalar_one_or_none()
-
-    if repo is None:
-        raise HTTPException(status_code=404, detail="Repository not found")
-
-    if body.review_enabled is not None:
-        repo.review_enabled = body.review_enabled
-
-    await db.flush()
-    logger.info(
-        "repo_settings_updated",
-        repo=repo.full_name,
-        review_enabled=repo.review_enabled,
-    )
-    return _repo_settings(repo)
-
-
-@router.get("/installations/by-github-id/{github_install_id}")
-async def get_installation_by_github_id(
-    github_install_id: int,
-    db: AsyncSession = Depends(get_db_session),
-):
-    """
-    Resolve an installation by GitHub's numeric install id.
-
-    Used by the /welcome page: GitHub redirects there after install with
-    ?installation_id=<github_install_id>, and the page needs to confirm
-    which account + repos were just connected.
-    """
-    installation = (await db.execute(
-        select(Installation)
-        .where(Installation.github_install_id == github_install_id)
-        .options(selectinload(Installation.repositories))
-    )).scalar_one_or_none()
-
-    if installation is None:
-        raise HTTPException(status_code=404, detail="Installation not found")
-
-    repos = sorted(installation.repositories, key=lambda r: r.full_name)
     return {
-        "id": str(installation.id),
-        "account_login": installation.account_login,
-        "account_type": installation.account_type,
-        "account_avatar_url": installation.account_avatar_url,
-        "review_enabled": installation.review_enabled,
-        "review_categories": installation.review_categories,
-        "repositories": [
+        "id": str(run.id),
+        "status": run.status,
+        "verdict": _verdict(run),
+        "trigger": run.trigger,
+        "triggered_by": run.triggered_by,
+
+        "pr_number": pr.pr_number,
+        "pr_title": pr.title,
+        "pr_author": pr.author_login,
+        "head_sha": pr.head_sha,
+        "base_branch": pr.base_branch,
+        "head_branch": pr.head_branch,
+
+        "repo_full_name": repo_obj.full_name,
+        "repo_owner": repo_obj.owner,
+        "repo_name": repo_obj.name,
+
+        "findings_count": run.findings_count or 0,
+        "critical_count": run.critical_count or 0,
+        "high_count": run.high_count or 0,
+        "medium_count": run.medium_count or 0,
+        "low_count": run.low_count or 0,
+
+        "queued_at": run.queued_at.isoformat() if run.queued_at else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "duration_ms": run.duration_ms,
+        "duration_str": _duration_str(run.duration_ms),
+
+        "model_used": run.model_used,
+        "input_tokens": run.input_tokens or 0,
+        "output_tokens": run.output_tokens or 0,
+        "total_cost_usd": float(run.total_cost_usd or 0),
+
+        "github_review_id": run.github_review_id,
+        "review_comment_url": run.review_comment_url,
+        "error_message": run.error_message,
+
+        "findings": [
+            {
+                "id": str(f.id),
+                "severity": f.severity,
+                "category": f.category,
+                "title": f.title,
+                "description": f.description,
+                "suggestion": f.suggestion,
+                "file_path": f.file_path,
+                "line_number": f.line_number,
+                "diff_position": f.diff_position,
+                "code_snippet": f.code_snippet,
+                "was_posted": f.was_posted,
+                "post_failed": f.post_failed,
+                "github_comment_id": f.github_comment_id,
+            }
+            for f in findings
+        ],
+
+        "reasoning_steps": [
+            {
+                "step_number": s.step_number,
+                "step_type": s.step_type,
+                "content": s.content,
+                "tool_name": s.tool_name,
+                "tool_input": s.tool_input,
+                "tool_output_summary": s.tool_output_summary,
+                "tokens_used": s.tokens_used,
+                "duration_ms": s.duration_ms,
+            }
+            for s in steps
+        ],
+    }
+
+
+# ─────────────────────────────────────────────
+# GET /api/reviews/{review_run_id}/trace
+# ─────────────────────────────────────────────
+@router.get("/api/reviews/{review_run_id}/trace")
+async def get_trace(
+    review_run_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    installation: Optional[Installation] = Depends(optional_installation),
+):
+    """Standalone reasoning trace endpoint for MCP tool."""
+    run_id = _parse_uuid(review_run_id, "review_run_id")
+
+    result = await db.execute(
+        select(ReviewRun, PullRequest, Repository)
+        .join(PullRequest, ReviewRun.pull_request_id == PullRequest.id)
+        .join(Repository, PullRequest.repository_id == Repository.id)
+        .where(ReviewRun.id == run_id)
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Review run not found")
+
+    run, pr, repo_obj = row
+
+    if installation and repo_obj.installation_id != installation.id:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    steps_result = await db.execute(
+        select(ReasoningStep)
+        .where(ReasoningStep.review_run_id == run_id)
+        .order_by(ReasoningStep.step_number)
+    )
+    steps = steps_result.scalars().all()
+
+    return {
+        "review_run_id": str(run.id),
+        "pr_title": pr.title,
+        "pr_number": pr.pr_number,
+        "repo_full_name": repo_obj.full_name,
+        "steps": [
+            {
+                "step_number": s.step_number,
+                "step_type": s.step_type,
+                "content": s.content,
+                "tool_name": s.tool_name,
+                "tool_input": s.tool_input,
+                "tool_output_summary": s.tool_output_summary,
+                "tokens_used": s.tokens_used,
+                "duration_ms": s.duration_ms,
+            }
+            for s in steps
+        ],
+    }
+
+
+# ─────────────────────────────────────────────
+# GET /api/findings
+# ─────────────────────────────────────────────
+@router.get("/api/findings")
+async def list_findings(
+    severity: Optional[str] = None,
+    category: Optional[str] = None,
+    repo: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db_session),
+    installation: Optional[Installation] = Depends(optional_installation),
+):
+    """List findings with optional filters. Scoped by installation if authed."""
+
+    query = (
+        select(
+            Finding,
+            PullRequest.pr_number,
+            Repository.full_name.label("repo_full_name"),
+        )
+        .join(ReviewRun, Finding.review_run_id == ReviewRun.id)
+        .join(PullRequest, ReviewRun.pull_request_id == PullRequest.id)
+        .join(Repository, PullRequest.repository_id == Repository.id)
+        .order_by(Finding.created_at.desc())
+    )
+
+    if installation:
+        query = query.where(Repository.installation_id == installation.id)
+    if severity:
+        query = query.where(Finding.severity == severity)
+    if category:
+        query = query.where(Finding.category == category)
+    if repo:
+        query = query.where(Repository.full_name == repo)
+
+    query = query.limit(limit).offset(offset)
+    result = await db.execute(query)
+    rows = result.all()
+
+    return {
+        "findings": [
+            {
+                "id": str(row.Finding.id),
+                "severity": row.Finding.severity,
+                "category": row.Finding.category,
+                "title": row.Finding.title,
+                "description": row.Finding.description,
+                "suggestion": row.Finding.suggestion,
+                "file_path": row.Finding.file_path,
+                "line_number": row.Finding.line_number,
+                "diff_position": row.Finding.diff_position,
+                "was_posted": row.Finding.was_posted,
+                "pr_number": row.pr_number,
+                "repo_full_name": row.repo_full_name,
+            }
+            for row in rows
+        ]
+    }
+
+
+# ─────────────────────────────────────────────
+# GET /api/repos
+# ─────────────────────────────────────────────
+@router.get("/api/repos")
+async def list_repos(
+    db: AsyncSession = Depends(get_db_session),
+    installation: Optional[Installation] = Depends(optional_installation),
+):
+    """List repositories with review stats."""
+
+    query = select(Repository).order_by(Repository.last_reviewed_at.desc())
+    if installation:
+        query = query.where(Repository.installation_id == installation.id)
+
+    result = await db.execute(query)
+    repos = result.scalars().all()
+
+    return {
+        "repos": [
             {
                 "id": str(r.id),
                 "full_name": r.full_name,
+                "owner": r.owner,
+                "name": r.name,
                 "is_private": r.is_private,
                 "default_branch": r.default_branch,
+                "total_reviews": r.total_reviews or 0,
+                "total_findings": r.total_findings or 0,
                 "review_enabled": r.review_enabled,
+                "first_seen_at": r.first_seen_at.isoformat() if r.first_seen_at else None,
+                "last_reviewed_at": r.last_reviewed_at.isoformat() if r.last_reviewed_at else None,
             }
             for r in repos
-        ],
+        ]
     }
 
 
-@router.patch("/installations/{installation_id}")
-async def update_installation(
-    installation_id: str,
-    body: InstallationSettingsUpdate,
+# ─────────────────────────────────────────────
+# GET /api/installations
+# ─────────────────────────────────────────────
+@router.get("/api/installations")
+async def list_installations(
     db: AsyncSession = Depends(get_db_session),
 ):
-    """Org-level toggles: master switch and finding categories."""
+    """List active installations (public endpoint for demo)."""
 
-    iid = _parse_uuid(installation_id, "installation")
-
-    installation = (await db.execute(
-        select(Installation).where(Installation.id == iid)
-    )).scalar_one_or_none()
-
-    if installation is None:
-        raise HTTPException(status_code=404, detail="Installation not found")
-
-    if body.review_enabled is not None:
-        installation.review_enabled = body.review_enabled
-
-    if body.review_categories is not None:
-        valid = {"security", "performance", "quality"}
-        invalid = set(body.review_categories) - valid
-        if invalid:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid categories: {sorted(invalid)}",
-            )
-        installation.review_categories = body.review_categories
-
-    await db.flush()
-    logger.info(
-        "installation_settings_updated",
-        account=installation.account_login,
-        review_enabled=installation.review_enabled,
-        categories=installation.review_categories,
+    result = await db.execute(
+        select(Installation)
+        .where(Installation.is_active.is_(True))
+        .order_by(Installation.installed_at.desc())
     )
+    installations = result.scalars().all()
+
     return {
-        "id": str(installation.id),
-        "account_login": installation.account_login,
-        "review_enabled": installation.review_enabled,
-        "review_categories": installation.review_categories,
+        "installations": [
+            {
+                "id": str(i.id),
+                "github_install_id": i.github_install_id,
+                "account_login": i.account_login,
+                "account_type": i.account_type,
+                "account_avatar_url": i.account_avatar_url,
+                "installed_at": i.installed_at.isoformat() if i.installed_at else None,
+                "review_enabled": i.review_enabled,
+                "review_categories": i.review_categories,
+            }
+            for i in installations
+        ]
     }
+
+
+# ─────────────────────────────────────────────
+# GET /api/connect  (requires auth)
+# ─────────────────────────────────────────────
+@router.get("/api/connect")
+async def get_connect_info(
+    request=None,
+    db: AsyncSession = Depends(get_db_session),
+    installation: Optional[Installation] = Depends(optional_installation),
+):
+    """Returns API key and MCP connection config for the settings page."""
+    if not installation:
+        raise HTTPException(status_code=401, detail="Authorization required")
+
+    from app.services.api_key import ensure_api_key
+    key = await ensure_api_key(db, installation)
+    await db.commit()
+
+    api_url = "https://your-railway-url.up.railway.app"
+
+    return {
+        "api_key": key,
+        "api_url": api_url,
+        "mcp_config": {
+            "mcpServers": {
+                "marginalia": {
+                    "command": "python",
+                    "args": ["mcp_server.py"],
+                    "env": {
+                        "MARGINALIA_API_KEY": key,
+                        "MARGINALIA_API_URL": api_url,
+                    },
+                }
+            }
+        },
+    }
+
+
+# ─────────────────────────────────────────────
+# POST /api/keys/rotate  (requires auth)
+# ─────────────────────────────────────────────
+@router.post("/api/keys/rotate")
+async def rotate_key(
+    db: AsyncSession = Depends(get_db_session),
+    installation: Optional[Installation] = Depends(optional_installation),
+):
+    """Rotate the API key. Old key stops working immediately."""
+    if not installation:
+        raise HTTPException(status_code=401, detail="Authorization required")
+
+    from app.services.api_key import rotate_api_key
+    new_key = await rotate_api_key(db, installation)
+    await db.commit()
+
+    return {"api_key": new_key, "rotated": True}

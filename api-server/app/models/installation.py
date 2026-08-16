@@ -42,6 +42,20 @@ class Installation(UUIDMixin, TimestampMixin, Base):
         nullable=True
     )
 
+    # Per-installation API key (MCP / external read access).
+    # hash = sha256 hex, unique-indexed for O(1) auth lookup;
+    # encrypted = Fernet ciphertext so the connect page can re-display it.
+    api_key_hash: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        unique=True,
+        index=True
+    )
+    api_key_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True
+    )
+
     # Lifecycle
     installed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

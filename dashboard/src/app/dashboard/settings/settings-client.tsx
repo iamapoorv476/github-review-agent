@@ -1,257 +1,213 @@
 "use client";
 
-import { useState } from "react";
-import {
-  saveInstallationSettings,
-  saveRepoSettings,
-  type RepoSettings,
-} from "@/lib/data";
+import { useState, useEffect } from "react";
 
-/*
- * Settings limited to what the backend persists:
- *   • per-repo   → review_enabled  (PATCH /api/repos/:id)
- *   • per-install→ review_categories (PATCH /api/installations/:id)
- *
- * Everything the mock UI used to show (minSeverity, ignoredPaths,
- * customInstructions, draft-skipping, per-event triggers, etc.) was
- * removed because there are no columns backing it. Add the columns +
- * schema fields first, then reintroduce the controls here.
- */
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
-const ALL_CATEGORIES = ["security", "performance", "quality"] as const;
-
-function Toggle({
-  on,
-  onChange,
-  label,
-}: {
-  on: boolean;
-  onChange: (v: boolean) => void;
-  label: string;
-}) {
-  return (
-    <button
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      onClick={() => onChange(!on)}
-      className={`relative h-[22px] w-[38px] flex-none rounded-full transition-colors ${
-        on ? "bg-verdigris" : "bg-line-2"
-      }`}
-    >
-      <span
-        className={`absolute top-[3px] h-4 w-4 rounded-full bg-white shadow transition-all ${
-          on ? "left-[19px]" : "left-[3px]"
-        }`}
-      />
-    </button>
-  );
+interface ConnectInfo {
+  api_key: string;
+  api_url: string;
+  mcp_config: Record<string, unknown>;
 }
 
-function Card({
-  title,
-  sub,
-  children,
+export function SettingsClient({
+  apiKey: initialKey,
 }: {
-  title: string;
-  sub: string;
-  children: React.ReactNode;
+  apiKey?: string;
 }) {
-  return (
-    <div className="mb-4.5 overflow-hidden rounded-lg border border-line bg-raised shadow-card">
-      <div className="border-b border-line px-5 pb-3 pt-4">
-        <h2 className="text-[14.5px] font-semibold tracking-tight">{title}</h2>
-        <p className="mt-0.5 text-[12.5px] text-ink-2">{sub}</p>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function Row({
-  label,
-  desc,
-  children,
-}: {
-  label: React.ReactNode;
-  desc: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-5 border-b border-line px-5 py-3.5 last:border-b-0">
-      <div>
-        <div className="text-[13.5px] font-medium">{label}</div>
-        <div className="mt-0.5 max-w-[46ch] text-xs text-ink-2">{desc}</div>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-const SELECT_CLS =
-  "rounded-md border border-line-2 bg-raised px-2.5 py-1.5 text-[12.5px] font-medium text-ink";
-
-export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
-  const [items, setItems] = useState<RepoSettings[]>(repos);
-  const [selectedId, setSelectedId] = useState<string>(repos[0]?.id ?? "");
-  const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [info, setInfo] = useState<ConnectInfo | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [rotating, setRotating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const current = items.find((r) => r.id === selectedId);
+  const storedKey =
+    typeof window !== "undefined"
+      ? localStorage.getItem("marginalia_api_key") ?? initialKey ?? ""
+      : initialKey ?? "";
 
-  if (!current) {
-    return (
-      <>
-        <h1 className="text-[23px] font-bold tracking-tight">Repos &amp; rules</h1>
-        <p className="mt-2 text-[13px] text-ink-2">
-          No repositories yet. Install the GitHub App on a repo to configure it here.
-        </p>
-      </>
-    );
-  }
+  useEffect(() => {
+    if (!storedKey) return;
+    fetch(`${API_BASE}/api/connect`, {
+      headers: { Authorization: `Bearer ${storedKey}` },
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error(`${r.status}`);
+        return r.json();
+      })
+      .then(setInfo)
+      .catch((e) => setError(`Could not load connection info: ${e.message}`));
+  }, [storedKey]);
 
-  const update = (patch: Partial<RepoSettings>) => {
-    setItems((prev) =>
-      prev.map((r) => (r.id === current.id ? { ...r, ...patch } : r))
-    );
-    setSaved(false);
+  const copy = async (text: string, label: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied(null), 2000);
   };
 
-  const toggleCategory = (cat: string) => {
-    const has = current.reviewCategories.includes(cat);
-    const next = has
-      ? current.reviewCategories.filter((c) => c !== cat)
-      : [...current.reviewCategories, cat];
-    // categories are installation-level → apply to every repo in this install
-    setItems((prev) =>
-      prev.map((r) =>
-        r.installationId === current.installationId
-          ? { ...r, reviewCategories: next }
-          : r
-      )
-    );
-    setSaved(false);
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    setError(null);
+  const rotateKey = async () => {
+    if (!storedKey) return;
+    setRotating(true);
     try {
-      await saveRepoSettings(current.id, { reviewEnabled: current.reviewEnabled });
-      await saveInstallationSettings(current.installationId, {
-        reviewCategories: current.reviewCategories,
+      const res = await fetch(`${API_BASE}/api/keys/rotate`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${storedKey}` },
       });
-      setSaved(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
+      if (!res.ok) throw new Error(`${res.status}`);
+      const data = await res.json();
+      localStorage.setItem("marginalia_api_key", data.api_key);
+      setInfo((prev) =>
+        prev ? { ...prev, api_key: data.api_key } : null
+      );
+    } catch (e: unknown) {
+      setError(`Rotation failed: ${e instanceof Error ? e.message : e}`);
     } finally {
-      setSaving(false);
+      setRotating(false);
     }
   };
 
+  const mcpConfig = info
+    ? JSON.stringify(
+        {
+          mcpServers: {
+            marginalia: {
+              command: "python",
+              args: ["mcp_server.py"],
+              env: {
+                MARGINALIA_API_KEY: info.api_key,
+                MARGINALIA_API_URL: info.api_url,
+              },
+            },
+          },
+        },
+        null,
+        2
+      )
+    : "";
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        {error}
+      </div>
+    );
+  }
+
+  if (!storedKey) {
+    return (
+      <div className="rounded-lg border border-line bg-raised p-6 text-sm text-ink-3">
+        No API key found. Install the GitHub App to get your key.
+      </div>
+    );
+  }
+
   return (
-    <>
-      <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-[23px] font-bold tracking-tight">Repos &amp; rules</h1>
-          <p className="mt-0.5 text-[13px] text-ink-2">How the agent behaves, per repository.</p>
-        </div>
-        <select
-          className={SELECT_CLS}
-          aria-label="Repository"
-          value={current.id}
-          onChange={(e) => {
-            setSelectedId(e.target.value);
-            setSaved(false);
-          }}
-        >
-          {items.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.fullName}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="max-w-[720px]">
-        <Card title="Reviewing" sub="Whether the agent reviews pull requests on this repo.">
-          <Row
-            label={current.reviewEnabled ? "Reviews are active" : "Reviews are paused"}
-            desc={`${current.fullName} · last review ${current.lastReviewAgo} · ${current.totalReviews} total`}
+    <div className="flex flex-col gap-6">
+      {/* API Key */}
+      <section className="rounded-lg border border-line bg-raised p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-ink">API Key</h2>
+            <p className="mt-0.5 text-xs text-ink-3">
+              Used by the MCP server to authenticate with Marginalia.
+            </p>
+          </div>
+          <button
+            onClick={rotateKey}
+            disabled={rotating}
+            className="rounded-md border border-line bg-paper px-3 py-1.5 text-xs font-medium text-ink-2 hover:bg-recess disabled:opacity-50"
           >
-            <Toggle
-              on={current.reviewEnabled}
-              onChange={(v) => update({ reviewEnabled: v })}
-              label="Review enabled"
-            />
-          </Row>
-        </Card>
+            {rotating ? "Rotating…" : "Rotate key"}
+          </button>
+        </div>
 
-        <Card
-          title="What to look for"
-          sub="Finding categories the agent reports. Applies to all repos under this account."
-        >
-          {ALL_CATEGORIES.map((cat) => (
-            <Row
-              key={cat}
-              label={<span className="capitalize">{cat}</span>}
-              desc={
-                cat === "security"
-                  ? "Secrets, injection, auth bypasses, missing validation."
-                  : cat === "performance"
-                    ? "N+1 queries, blocking I/O, unnecessary work."
-                    : "Error handling, dead code, correctness bugs."
-              }
+        <div className="flex items-center gap-2 rounded-md border border-line bg-paper px-3 py-2">
+          <code className="flex-1 overflow-x-auto font-mono text-xs text-ink">
+            {info?.api_key ?? storedKey}
+          </code>
+          <button
+            onClick={() => copy(info?.api_key ?? storedKey, "key")}
+            className="shrink-0 text-xs text-ink-3 hover:text-ink"
+          >
+            {copied === "key" ? "Copied!" : "Copy"}
+          </button>
+        </div>
+      </section>
+
+      {/* MCP Config */}
+      <section className="rounded-lg border border-line bg-raised p-5">
+        <div className="mb-3">
+          <h2 className="text-sm font-semibold text-ink">
+            Connect Claude Desktop
+          </h2>
+          <p className="mt-0.5 text-xs text-ink-3">
+            Add this to your{" "}
+            <code className="font-mono">claude_desktop_config.json</code> to
+            query your reviews from Claude.
+          </p>
+        </div>
+
+        <div className="relative">
+          <pre className="overflow-x-auto rounded-md border border-line bg-paper p-3 font-mono text-xs text-ink">
+            {mcpConfig || "Loading…"}
+          </pre>
+          {mcpConfig && (
+            <button
+              onClick={() => copy(mcpConfig, "config")}
+              className="absolute right-2 top-2 rounded border border-line bg-paper px-2 py-1 text-xs text-ink-3 hover:text-ink"
             >
-              <Toggle
-                on={current.reviewCategories.includes(cat)}
-                onChange={() => toggleCategory(cat)}
-                label={`Report ${cat}`}
-              />
-            </Row>
-          ))}
-        </Card>
-
-        <Card title="Repository" sub="Read from GitHub — not editable here.">
-          <Row label="Account" desc="Installation owner.">
-            <span className="font-mono text-[12.5px] text-ink-2">{current.accountLogin}</span>
-          </Row>
-          <Row label="Visibility" desc="From the GitHub repository.">
-            <span className="font-mono text-[12.5px] text-ink-2">
-              {current.isPrivate ? "private" : "public"}
-            </span>
-          </Row>
-          <Row label="Default branch" desc="Base for most reviews.">
-            <span className="font-mono text-[12.5px] text-ink-2">{current.defaultBranch}</span>
-          </Row>
-          <Row label="Findings to date" desc="Across all reviews on this repo.">
-            <span className="font-mono text-[12.5px] text-ink-2">{current.totalFindings}</span>
-          </Row>
-        </Card>
-
-        <div className="flex items-center justify-end gap-2.5 pt-1">
-          {error && <span className="text-xs font-medium text-rubric">{error}</span>}
-          {saved && <span className="text-xs font-medium text-verdigris">Saved ✓</span>}
-          <button
-            className="rounded-md border border-line-2 bg-raised px-3.5 py-2 text-[13px] font-semibold hover:border-ink-3"
-            onClick={() => {
-              setItems(repos);
-              setSaved(false);
-              setError(null);
-            }}
-          >
-            Discard
-          </button>
-          <button
-            disabled={saving}
-            className="rounded-md border border-lapis bg-lapis px-3.5 py-2 text-[13px] font-semibold text-white hover:bg-lapis-ink disabled:opacity-60"
-            onClick={handleSave}
-          >
-            {saving ? "Saving…" : "Save changes"}
-          </button>
+              {copied === "config" ? "Copied!" : "Copy"}
+            </button>
+          )}
         </div>
-      </div>
-    </>
+      </section>
+
+      {/* What you can ask Claude */}
+      <section className="rounded-lg border border-line bg-raised p-5">
+        <h2 className="mb-3 text-sm font-semibold text-ink">
+          What you can ask Claude
+        </h2>
+        <ul className="flex flex-col gap-2">
+          {[
+            "Show me all critical security findings from the last week",
+            "Which PR had the most issues?",
+            "Walk me through the reasoning trace for review <id>",
+            "What are the most common security issues across my repos?",
+            "How much have I spent on reviews this month?",
+          ].map((q) => (
+            <li key={q} className="flex items-start gap-2 text-xs text-ink-2">
+              <span className="mt-0.5 text-ink-3">→</span>
+              <span className="font-mono">{q}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Available MCP tools */}
+      <section className="rounded-lg border border-line bg-raised p-5">
+        <h2 className="mb-3 text-sm font-semibold text-ink">
+          Available tools
+        </h2>
+        <div className="grid grid-cols-2 gap-2">
+          {[
+            { name: "list_reviews", desc: "Review history with verdicts" },
+            { name: "get_review", desc: "Full review with all findings" },
+            { name: "list_findings", desc: "Filter findings by severity" },
+            { name: "get_stats", desc: "Aggregate stats and spend" },
+            { name: "list_repos", desc: "Installed repositories" },
+            { name: "get_reasoning_trace", desc: "Agent's step-by-step thinking" },
+          ].map((t) => (
+            <div
+              key={t.name}
+              className="rounded-md border border-line bg-paper p-2"
+            >
+              <code className="text-xs font-semibold text-lapis">
+                {t.name}
+              </code>
+              <p className="mt-0.5 text-[11px] text-ink-3">{t.desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
   );
 }

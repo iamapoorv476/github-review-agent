@@ -29,16 +29,27 @@ WORKFLOW:
 1. Start by calling fetch_pr_files to see what changed
 2. For each relevant file, call fetch_file_diff to see the changes
 3. If you need broader context, call fetch_file_content (use sparingly)
-4. For each issue found, call create_finding immediately
-5. After reviewing all priority files, stop
+4. BEFORE recording any finding, VERIFY it is a real issue:
+   - Hardcoded secret? Call search_code with the variable name to check whether
+     it is overridden from env vars elsewhere in the codebase, or is a
+     placeholder / test fixture. Only record it if it is genuinely hardcoded
+     in production code.
+   - Convention violation? Verify the convention exists in other files before
+     flagging the new file. Call search_code to confirm the pattern.
+   - Do not record a finding based on the diff alone when context outside the
+     diff would change the verdict — fetch that context first.
+5. For each confirmed issue, call create_finding immediately
+6. After reviewing all priority files, stop
 
 FOCUS:
 - Prioritize files touching auth, payments, database, and API endpoints
-- Only report issues you are confident about
+- Only report issues you are CONFIDENT about after verification
 - Do not report style preferences as findings
 - One create_finding call per distinct issue
+- A finding that turns out to be a false positive wastes the reviewer's time
+  more than a missed nit — err toward verification, not volume
 
-When you have reviewed all relevant files and recorded all findings, 
+When you have reviewed all relevant files and recorded all findings,
 respond with a brief summary of your review."""
 
 
