@@ -95,12 +95,12 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
       const res = await fetch(`${API_BASE}/api/repos/${repoId}/settings`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ review_enabled: enabled }),
+        body: JSON.stringify({ reviewEnabled: enabled }),
       });
       if (!res.ok) throw new Error(`${res.status}`);
       setRepoList((prev) =>
         prev.map((r) =>
-          r.id === repoId ? { ...r, review_enabled: enabled } : r
+          r.id === repoId ? { ...r, reviewEnabled: enabled } : r
         )
       );
     } catch {
@@ -136,6 +136,7 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
         Manage repositories and connect Claude via MCP.
       </p>
 
+      {/* Tab bar */}
       <div className="mb-6 flex gap-1 border-b border-line">
         {(["repos", "connect"] as const).map((t) => (
           <button
@@ -152,6 +153,7 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
         ))}
       </div>
 
+      {/* ── Repos & rules ── */}
       {tab === "repos" && (
         <div className="flex flex-col gap-4">
           {repoList.length === 0 && (
@@ -169,43 +171,42 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="truncate font-mono text-sm font-semibold text-ink">
-                      {repo.full_name}
+                      {repo.fullName}
                     </span>
-                    {repo.is_private && (
+                    {repo.isPrivate && (
                       <span className="rounded-full border border-line bg-paper px-2 py-0.5 text-[10px] text-ink-3">
                         private
                       </span>
                     )}
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1.5">
-                    {repo.review_categories.map((c) => (
+                    {repo.reviewCategories.map((c) => (
                       <CategoryBadge key={c} label={c} />
                     ))}
                   </div>
                   <p className="mt-2 text-xs text-ink-3">
-                    {repo.total_reviews} reviews · {repo.total_findings}{" "}
-                    findings
-                    {repo.last_reviewed_at
+                    {repo.totalReviews} reviews · {repo.totalFindings} findings
+                    {repo.lastReviewedAt
                       ? ` · last reviewed ${new Date(
-                          repo.last_reviewed_at
+                          repo.lastReviewedAt
                         ).toLocaleDateString()}`
                       : ""}
                   </p>
                 </div>
 
                 <button
-                  onClick={() => toggleRepo(repo.id, !repo.review_enabled)}
+                  onClick={() => toggleRepo(repo.id, !repo.reviewEnabled)}
                   disabled={toggling === repo.id}
                   className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none disabled:opacity-50 ${
-                    repo.review_enabled ? "bg-ink" : "bg-line"
+                    repo.reviewEnabled ? "bg-ink" : "bg-line"
                   }`}
                   aria-label={
-                    repo.review_enabled ? "Disable reviews" : "Enable reviews"
+                    repo.reviewEnabled ? "Disable reviews" : "Enable reviews"
                   }
                 >
                   <span
                     className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
-                      repo.review_enabled ? "translate-x-4" : "translate-x-0"
+                      repo.reviewEnabled ? "translate-x-4" : "translate-x-0"
                     }`}
                   />
                 </button>
@@ -215,6 +216,7 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
         </div>
       )}
 
+      {/* ── Connect Claude ── */}
       {tab === "connect" && (
         <div className="flex flex-col gap-6">
           {connectError && (
