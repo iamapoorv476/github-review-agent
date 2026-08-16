@@ -186,11 +186,9 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
                   </div>
                   <p className="mt-2 text-xs text-ink-3">
                     {repo.totalReviews} reviews · {repo.totalFindings} findings
-                    {repo.lastReviewedAt
-                      ? ` · last reviewed ${new Date(
-                          repo.lastReviewedAt
-                        ).toLocaleDateString()}`
-                      : ""}
+                    {repo.lastReviewAgo
+                      ? ` · last reviewed ${repo.lastReviewAgo}`
+                      : ""}  
                   </p>
                 </div>
 
