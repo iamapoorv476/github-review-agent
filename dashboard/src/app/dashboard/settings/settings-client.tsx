@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 
-/* ─── types ──────────────────────────────────────────────── */
+/* ─── types — must match data.ts exactly ─────────────────── */
 export interface RepoSettings {
   id: string;
   full_name: string;
@@ -33,7 +33,9 @@ function CategoryBadge({ label }: { label: string }) {
   };
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize ${colours[label] ?? "bg-raised text-ink-2 border-line"}`}
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize ${
+        colours[label] ?? "bg-raised text-ink-2 border-line"
+      }`}
     >
       {label}
     </span>
@@ -42,29 +44,25 @@ function CategoryBadge({ label }: { label: string }) {
 
 /* ─── main component ─────────────────────────────────────── */
 export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
-  /* Connect-Claude state */
   const [connectInfo, setConnectInfo] = useState<ConnectInfo | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [rotating, setRotating] = useState(false);
-
-  /* Repo-toggle state */
   const [repoList, setRepoList] = useState<RepoSettings[]>(repos);
   const [toggling, setToggling] = useState<string | null>(null);
-
-  /* Active tab */
   const [tab, setTab] = useState<"repos" | "connect">("repos");
+  const [storedKey, setStoredKey] = useState("");
 
-  /* ── fetch connect info if we have a stored key ── */
   useEffect(() => {
-    const storedKey =
+    const key =
       typeof window !== "undefined"
-        ? localStorage.getItem("marginalia_api_key") ?? ""
+        ? (localStorage.getItem("marginalia_api_key") ?? "")
         : "";
-    if (!storedKey) return;
+    setStoredKey(key);
+    if (!key) return;
 
     fetch(`${API_BASE}/api/connect`, {
-      headers: { Authorization: `Bearer ${storedKey}` },
+      headers: { Authorization: `Bearer ${key}` },
     })
       .then((r) => {
         if (!r.ok) throw new Error(`${r.status}`);
@@ -76,19 +74,13 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
       );
   }, []);
 
-  /* ── copy helper ── */
   const copy = async (text: string, label: string) => {
     await navigator.clipboard.writeText(text);
     setCopied(label);
     setTimeout(() => setCopied(null), 2000);
   };
 
-  /* ── rotate key ── */
   const rotateKey = async () => {
-    const storedKey =
-      typeof window !== "undefined"
-        ? localStorage.getItem("marginalia_api_key") ?? ""
-        : "";
     if (!storedKey) return;
     setRotating(true);
     try {
@@ -99,6 +91,7 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
       if (!res.ok) throw new Error(`${res.status}`);
       const data = await res.json();
       localStorage.setItem("marginalia_api_key", data.api_key);
+      setStoredKey(data.api_key);
       setConnectInfo((prev) =>
         prev ? { ...prev, api_key: data.api_key } : null
       );
@@ -111,7 +104,6 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
     }
   };
 
-  /* ── toggle repo review ── */
   const toggleRepo = async (repoId: string, enabled: boolean) => {
     setToggling(repoId);
     try {
@@ -127,13 +119,12 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
         )
       );
     } catch {
-      /* silently ignore for now */
+      /* silently ignore */
     } finally {
       setToggling(null);
     }
   };
 
-  /* ── mcp config json ── */
   const mcpConfig = connectInfo
     ? JSON.stringify(
         {
@@ -153,12 +144,6 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
       )
     : "";
 
-  const storedKey =
-    typeof window !== "undefined"
-      ? localStorage.getItem("marginalia_api_key") ?? ""
-      : "";
-
-  /* ════════════════════════════════════════════════════════ */
   return (
     <div className="mx-auto max-w-3xl px-4 py-10">
       <h1 className="mb-1 text-2xl font-semibold text-ink">Settings</h1>
@@ -183,7 +168,7 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
         ))}
       </div>
 
-      {/* ── Tab: Repos & rules ──────────────────────────── */}
+      {/* ── Repos & rules ── */}
       {tab === "repos" && (
         <div className="flex flex-col gap-4">
           {repoList.length === 0 && (
@@ -225,11 +210,8 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
                   </p>
                 </div>
 
-                {/* Toggle */}
                 <button
-                  onClick={() =>
-                    toggleRepo(repo.id, !repo.review_enabled)
-                  }
+                  onClick={() => toggleRepo(repo.id, !repo.review_enabled)}
                   disabled={toggling === repo.id}
                   className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none disabled:opacity-50 ${
                     repo.review_enabled ? "bg-ink" : "bg-line"
@@ -250,7 +232,7 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
         </div>
       )}
 
-      {/* ── Tab: Connect Claude ─────────────────────────── */}
+      {/* ── Connect Claude ── */}
       {tab === "connect" && (
         <div className="flex flex-col gap-6">
           {connectError && (
@@ -265,7 +247,6 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
             </div>
           )}
 
-          {/* API Key card */}
           {(storedKey || connectInfo) && (
             <section className="rounded-lg border border-line bg-raised p-5">
               <div className="mb-3 flex items-center justify-between">
@@ -283,7 +264,6 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
                   {rotating ? "Rotating…" : "Rotate key"}
                 </button>
               </div>
-
               <div className="flex items-center gap-2 rounded-md border border-line bg-paper px-3 py-2">
                 <code className="flex-1 overflow-x-auto font-mono text-xs text-ink">
                   {connectInfo?.api_key ?? storedKey}
@@ -300,7 +280,6 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
             </section>
           )}
 
-          {/* MCP Config card */}
           {mcpConfig && (
             <section className="rounded-lg border border-line bg-raised p-5">
               <div className="mb-3">
@@ -309,13 +288,10 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
                 </h2>
                 <p className="mt-0.5 text-xs text-ink-3">
                   Add this to your{" "}
-                  <code className="font-mono">
-                    claude_desktop_config.json
-                  </code>{" "}
+                  <code className="font-mono">claude_desktop_config.json</code>{" "}
                   to query your reviews from Claude.
                 </p>
               </div>
-
               <div className="relative">
                 <pre className="overflow-x-auto rounded-md border border-line bg-paper p-3 font-mono text-xs text-ink">
                   {mcpConfig}
@@ -330,7 +306,6 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
             </section>
           )}
 
-          {/* Example prompts */}
           <section className="rounded-lg border border-line bg-raised p-5">
             <h2 className="mb-3 text-sm font-semibold text-ink">
               What you can ask Claude
@@ -343,10 +318,7 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
                 "What are the most common security issues across my repos?",
                 "How much have I spent on reviews this month?",
               ].map((q) => (
-                <li
-                  key={q}
-                  className="flex items-start gap-2 text-xs text-ink-2"
-                >
+                <li key={q} className="flex items-start gap-2 text-xs text-ink-2">
                   <span className="mt-0.5 text-ink-3">→</span>
                   <span className="font-mono">{q}</span>
                 </li>
@@ -354,7 +326,6 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
             </ul>
           </section>
 
-          {/* Available tools */}
           <section className="rounded-lg border border-line bg-raised p-5">
             <h2 className="mb-3 text-sm font-semibold text-ink">
               Available MCP tools
@@ -366,10 +337,7 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
                 { name: "list_findings", desc: "Filter findings by severity" },
                 { name: "get_stats", desc: "Aggregate stats and spend" },
                 { name: "list_repos", desc: "Installed repositories" },
-                {
-                  name: "get_reasoning_trace",
-                  desc: "Agent's step-by-step thinking",
-                },
+                { name: "get_reasoning_trace", desc: "Agent's step-by-step thinking" },
               ].map((t) => (
                 <div
                   key={t.name}
