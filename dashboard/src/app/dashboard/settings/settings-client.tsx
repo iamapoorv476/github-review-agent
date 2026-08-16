@@ -1,20 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-
-/* ─── types — must match data.ts exactly ─────────────────── */
-export interface RepoSettings {
-  id: string;
-  full_name: string;
-  owner: string;
-  name: string;
-  is_private: boolean;
-  review_enabled: boolean;
-  review_categories: string[];
-  total_reviews: number;
-  total_findings: number;
-  last_reviewed_at: string | null;
-}
+import type { RepoSettings } from "@/lib/data";
 
 interface ConnectInfo {
   api_key: string;
@@ -24,7 +11,6 @@ interface ConnectInfo {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
-/* ─── helpers ────────────────────────────────────────────── */
 function CategoryBadge({ label }: { label: string }) {
   const colours: Record<string, string> = {
     security: "bg-red-100 text-red-700 border-red-200",
@@ -42,7 +28,6 @@ function CategoryBadge({ label }: { label: string }) {
   );
 }
 
-/* ─── main component ─────────────────────────────────────── */
 export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
   const [connectInfo, setConnectInfo] = useState<ConnectInfo | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
@@ -151,7 +136,6 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
         Manage repositories and connect Claude via MCP.
       </p>
 
-      {/* Tab bar */}
       <div className="mb-6 flex gap-1 border-b border-line">
         {(["repos", "connect"] as const).map((t) => (
           <button
@@ -168,7 +152,6 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
         ))}
       </div>
 
-      {/* ── Repos & rules ── */}
       {tab === "repos" && (
         <div className="flex flex-col gap-4">
           {repoList.length === 0 && (
@@ -232,7 +215,6 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
         </div>
       )}
 
-      {/* ── Connect Claude ── */}
       {tab === "connect" && (
         <div className="flex flex-col gap-6">
           {connectError && (
@@ -318,7 +300,10 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
                 "What are the most common security issues across my repos?",
                 "How much have I spent on reviews this month?",
               ].map((q) => (
-                <li key={q} className="flex items-start gap-2 text-xs text-ink-2">
+                <li
+                  key={q}
+                  className="flex items-start gap-2 text-xs text-ink-2"
+                >
                   <span className="mt-0.5 text-ink-3">→</span>
                   <span className="font-mono">{q}</span>
                 </li>
@@ -337,7 +322,10 @@ export function SettingsClient({ repos }: { repos: RepoSettings[] }) {
                 { name: "list_findings", desc: "Filter findings by severity" },
                 { name: "get_stats", desc: "Aggregate stats and spend" },
                 { name: "list_repos", desc: "Installed repositories" },
-                { name: "get_reasoning_trace", desc: "Agent's step-by-step thinking" },
+                {
+                  name: "get_reasoning_trace",
+                  desc: "Agent's step-by-step thinking",
+                },
               ].map((t) => (
                 <div
                   key={t.name}
