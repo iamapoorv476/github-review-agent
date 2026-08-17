@@ -175,12 +175,21 @@ export interface RepoSettings {
   lastReviewAgo: string | null;
 }
 
+export interface InstallationRepo {
+  id: string;
+  fullName: string;
+  isPrivate: boolean;
+  reviewEnabled: boolean;
+}
+
 export interface Installation {
   id: string;
   accountLogin: string;
   accountType: string;
   accountAvatarUrl: string | null;
   reviewEnabled: boolean;
+  repositories: InstallationRepo[];
+  reviewCategories: string[];
 }
 
 export interface ReviewFilters {
@@ -425,6 +434,15 @@ export async function getInstallationByGithubId(
     accountType: r.account_type,
     accountAvatarUrl: r.account_avatar_url ?? null,
     reviewEnabled: r.review_enabled ?? true,
+    repositories: Array.isArray(r.repositories)
+      ? r.repositories.map((repo: any) => ({
+          id: repo.id,
+          fullName: repo.full_name,
+          isPrivate: repo.is_private ?? false,
+          reviewEnabled: repo.review_enabled ?? true,
+        }))
+      : [],
+    reviewCategories: r.review_categories ?? [],
   };
 }
 
