@@ -1,4 +1,8 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
+const RAW_API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
+// Strip any trailing slash(es) so `${API_BASE}${path}` never produces a
+// double slash (e.g. base "https://x.up.railway.app/" + path "/api/stats"
+// was hitting Railway as "//api/stats" -> 404).
+const API_BASE = RAW_API_BASE.replace(/\/+$/, "");
 
 /* ─── generic fetcher ─────────────────────────────────────── */
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -74,6 +78,7 @@ export interface Finding {
   lineNumber: number | null;
   diffPosition: number | null;
   wasPosted: boolean;
+  postFailed: boolean;           // true if posting to GitHub was attempted and failed
 
   /* aliases / extra fields used by FindingCard */
   file: string;                  // alias of filePath
@@ -247,6 +252,7 @@ function mapFinding(f: any): Finding {
     lineNumber,
     diffPosition: f.diff_position ?? null,
     wasPosted: f.was_posted ?? false,
+    postFailed: f.post_failed ?? false,
 
     file: filePath,
     line: lineNumber,
@@ -303,7 +309,12 @@ function toTraceStep(step: ReasoningStep): TraceStep {
 function mapRow(r: any): ReviewRow {
   const repoFullName = r.repo_full_name ?? "";
   const prAuthor = r.pr_author ?? "";
-  const reasoningSteps = r.reasoning_steps ?? 0;
+  // /api/reviews sends reasoning_steps as a plain count (number); the
+  // /api/reviews/{id} detail endpoint reuses this same field name but as
+  // the full array of step objects — handle both shapes here.
+  const reasoningSteps = Array.isArray(r.reasoning_steps)
+    ? r.reasoning_steps.length
+    : (r.reasoning_steps ?? 0);
   const durationMs = r.duration_ms ?? null;
   const findingsCount = r.findings_count ?? 0;
   const criticalCount = r.critical_count ?? 0;
@@ -374,7 +385,7 @@ function mapRow(r: any): ReviewRow {
     filesChanged: r.files_changed ?? 0,
 
     errorMessage: r.error_message ?? null,
-    githubUrl: r.github_comment_url ?? r.github_url ?? null,
+    githubUrl: r.review_comment_url ?? null,
   };
 }
 
@@ -386,7 +397,10 @@ function mapRepo(r: any): RepoSettings {
     name: r.name,
     isPrivate: r.is_private ?? false,
     reviewEnabled: r.review_enabled ?? true,
-    reviewCategories: r.review_categories ?? [],
+    // /api/repos doesn't return review_categories — that field only exists
+    // on Installation, not Repository, on the backend. Always empty here
+    // until/unless the backend adds per-repo category overrides.
+    reviewCategories: [],
     totalReviews: r.total_reviews ?? 0,
     totalFindings: r.total_findings ?? 0,
     lastReviewAgo: r.last_reviewed_at ? fmtTimeAgo(r.last_reviewed_at) : null,
@@ -396,11 +410,15 @@ function mapRepo(r: any): RepoSettings {
 /* ─── API functions ───────────────────────────────────────── */
 export async function getStats(): Promise<Stats> {
   const s = await api<any>("/api/stats");
+  // /api/stats only aggregates 3 buckets: critical_count, high_count, and
+  // suggestion_count (which is actually a sum of low_count server-side).
+  // warning_count is literally set to `= high_count` on the backend, so
+  // it's a duplicate, not a distinct "medium" bucket — there is no
+  // medium-severity aggregate exposed by this endpoint.
   const parts = [
     s.critical_count && `${s.critical_count} critical`,
     s.high_count && `${s.high_count} warning`,
-    s.medium_count && `${s.medium_count} suggestion`,
-    s.low_count && `${s.low_count} nit`,
+    s.suggestion_count && `${s.suggestion_count} nit`,
   ].filter(Boolean);
   return {
     reviewsThisMonth: s.total_reviews ?? 0,
