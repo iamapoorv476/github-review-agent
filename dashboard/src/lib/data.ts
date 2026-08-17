@@ -214,6 +214,7 @@ export interface Installation {
   reviewEnabled: boolean;
   repositories: InstallationRepo[];
   reviewCategories: string[];
+  apiKey?: string;
 }
 
 export interface ReviewFilters {
@@ -511,6 +512,7 @@ export async function getInstallationByGithubId(
     accountType: r.account_type,
     accountAvatarUrl: r.account_avatar_url ?? null,
     reviewEnabled: r.review_enabled ?? true,
+    apiKey: r.api_key,
     repositories: Array.isArray(r.repositories)
       ? r.repositories.map((repo: any) => ({
           id: repo.id,

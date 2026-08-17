@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SaveApiKey } from "@/components/save-api-key";
 import { getInstallationByGithubId } from "@/lib/data";
 import { githubInstallUrl } from "@/lib/github";
 
@@ -91,6 +92,7 @@ export default async function WelcomePage({
 
   return (
     <Shell>
+      <SaveApiKey apiKey={install.apiKey} />
       <div className="mb-6 flex items-center gap-3">
         <span
           className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-verdigris-wash text-lg text-verdigris"

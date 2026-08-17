@@ -560,21 +560,11 @@ async def list_installations(
             for i in installations
         ]
     }
-# ─────────────────────────────────────────────
-# GET /api/installations/by-github-id/{github_install_id}
-# ─────────────────────────────────────────────
 @router.get("/api/installations/by-github-id/{github_install_id}")
 async def get_installation_by_github_id(
     github_install_id: int,
     db: AsyncSession = Depends(get_db_session),
 ):
-    """
-    Look up an installation by its GitHub installation id, with its
-    connected repos. Used by the post-install /welcome page — right after
-    GitHub redirects back, the frontend only knows the GitHub install id
-    (from the query string) and has no API key yet, so this has to be a
-    public lookup keyed on that id rather than the authed /api/repos route.
-    """
     result = await db.execute(
         select(Installation).where(
             Installation.github_install_id == github_install_id
@@ -583,6 +573,10 @@ async def get_installation_by_github_id(
     installation = result.scalar_one_or_none()
     if not installation:
         raise HTTPException(status_code=404, detail="Installation not found")
+
+    from app.services.api_key import ensure_api_key
+    api_key = await ensure_api_key(db, installation)
+    await db.commit()
 
     repos_result = await db.execute(
         select(Repository).where(Repository.installation_id == installation.id)
@@ -597,6 +591,7 @@ async def get_installation_by_github_id(
         "account_avatar_url": installation.account_avatar_url,
         "review_enabled": installation.review_enabled,
         "review_categories": installation.review_categories,
+        "api_key": api_key,
         "repositories": [
             {
                 "id": str(r.id),
@@ -607,7 +602,6 @@ async def get_installation_by_github_id(
             for r in repos
         ],
     }
-
 
 
 # ─────────────────────────────────────────────
