@@ -1,88 +1,106 @@
-/**
- * Marginalia — data layer, wired to the live FastAPI backend.
- *
- * This is the ONLY place the UI touches data. Every exported type is the
- * shape a component actually consumes; the fetchers derive/format those
- * shapes from the /api/* responses (snake_case → camelCase, ms → seconds,
- * timestamps → "3h ago", severity counts → verdict, etc).
- *
- * Design rule (per project owner): the UI renders only what the backend
- * persists. Fields the schema has no column for were removed rather than
- * faked — see NOTES at the bottom for what was dropped and why.
- *
- * Configure the API origin (defaults to the FastAPI dev server):
- *   # .env.local
- *   NEXT_PUBLIC_API_URL=http://localhost:8000
- */
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
-// ---------------------------------------------------------------- types
-
-/** UI severity set — what badge components render. */
-export type Severity = "critical" | "warning" | "suggestion" | "nit";
-
-/** Derived PR verdict — what VerdictBadge renders. */
-export type Verdict = "approved" | "changes_requested" | "commented" | "running";
-
-/** Trace step kind — what TraceStepItem renders. */
-export type StepKind = "thought" | "record" | "verdict";
-
-export interface SeverityCounts {
-  critical: number;
-  warning: number;
-  suggestion: number;
-  nit: number;
+/* ─── generic fetcher ─────────────────────────────────────── */
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const url = `${API_BASE}${path}`;
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`API ${res.status} on ${path}: ${body}`);
+  }
+  return res.json();
 }
 
+/* ─── helpers ─────────────────────────────────────────────── */
+function fmtDurationStr(ms: number | null | undefined): string {
+  if (!ms) return "—";
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+function fmtTimeAgo(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+/* ─── types ───────────────────────────────────────────────── */
 export interface Stats {
   reviewsThisMonth: number;
   reviewsRunning: number;
   reviewsFailed: number;
   findingsSurfaced: number;
-  findingsBreakdown: string; // e.g. "3 critical · 5 warning · 8 suggestion"
-  medianReview: string; // e.g. "1m 12s" or "—"
-  reposActive: number;
-  totalCostUsd: number;
+  findingsBreakdown: string;
+  medianReview: string;
+  spendCents: number;
+  activeRepos: number;
 }
 
-export interface ReviewRow {
-  id: string;
-  prNumber: number;
-  prTitle: string;
-  repo: string; // full_name
-  author: string;
-  filesChanged: number;
-  verdict: Verdict;
-  trigger: string; // "opened" | "mention" | "synchronize" | ...
-  traceSteps: number;
-  findings: SeverityCounts;
-  cleanNote?: string; // set when there are no findings
-  durationSec: number;
-  ago: string;
-}
+export type Verdict =
+  | "changes_requested"
+  | "approved"
+  | "commented"
+  | "reviewing"
+  | "failed"
+  | "queued";
+
+export type Severity = "critical" | "high" | "medium" | "low";
+export type Category = "security" | "performance" | "quality";
 
 export interface Finding {
   id: string;
   severity: Severity;
-  category: "security" | "performance" | "quality";
-  file: string;
-  line: number | null;
-  note: string; // description, in the agent's voice
-  fix: string | null; // suggestion
-  codeSnippet: string | null;
+  category: Category;
+  title: string;
+  description: string;
+  suggestion: string | null;
+  filePath: string;
+  lineNumber: number | null;
+  diffPosition: number | null;
   wasPosted: boolean;
-  githubCommentId: number | null; // deep-link to the PR comment thread
 }
 
-export interface TraceStep {
-  n: number;
-  kind: StepKind;
-  durationSec: number;
-  tokens: number;
-  thought: string; // content
-  action?: { fn: string; arg: string }; // tool_call
-  observation?: { summary: string; body: string }; // tool_result
+export interface ReviewRow {
+  id: string;
+  status: string;
+  verdict: Verdict;
+  trigger: string;
+  prNumber: number;
+  prTitle: string;
+  prAuthor: string;
+  repoFullName: string;
+  repoOwner: string;
+  repoName: string;
+  findingsCount: number;
+  criticalCount: number;
+  highCount: number;
+  mediumCount: number;
+  lowCount: number;
+  durationStr: string;
+  durationMs: number | null;
+  queuedAt: string;
+  completedAt: string | null;
+  modelUsed: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  totalCostUsd: number;
+  reasoningSteps: number;
+  filesChanged: number;
+  timeAgo: string;
 }
 
 export interface ReviewDetail extends ReviewRow {
@@ -91,230 +109,169 @@ export interface ReviewDetail extends ReviewRow {
   deletions: number;
   model: string;
   tokensUsed: number;
-  githubUrl: string | null;
-  toolCalls: number;
-  errorMessage: string | null;
-  findings: SeverityCounts; // inherited row summary counts
-  findingsList: Finding[]; // full findings for the tab
-  trace: TraceStep[];
+  findings: Finding[];
+  reasoningStepsList: ReasoningStep[];
+}
+
+export interface ReasoningStep {
+  stepNumber: number;
+  stepType: string;
+  content: string;
+  toolName: string | null;
+  toolInput: Record<string, unknown> | null;
+  toolOutputSummary: string | null;
+  tokensUsed: number;
+  durationMs: number | null;
 }
 
 export interface RepoSettings {
   id: string;
-  installationId: string; // needed for org-level PATCH; see note
   fullName: string;
   owner: string;
   name: string;
   isPrivate: boolean;
-  defaultBranch: string;
   reviewEnabled: boolean;
+  reviewCategories: string[];
   totalReviews: number;
   totalFindings: number;
-  lastReviewAgo: string;
+  lastReviewAgo: string | null;
+}
+
+export interface Installation {
+  id: string;
   accountLogin: string;
-  reviewCategories: string[]; // installation-level: security/performance/quality
+  accountType: string;
+  accountAvatarUrl: string | null;
+  reviewEnabled: boolean;
 }
 
 export interface ReviewFilters {
-  status?: "queued" | "processing" | "completed" | "failed" | "cancelled";
+  status?: string;
   repo?: string;
-  severity?: Severity;
+  severity?: string;
   limit?: number;
   offset?: number;
 }
 
-// ---------------------------------------------------------------- helpers
-
-const DB_TO_UI: Record<string, Severity> = {
+/* ─── severity filter mapping ─────────────────────────────── */
+const UI_TO_DB: Record<string, string> = {
   critical: "critical",
-  high: "warning",
-  medium: "suggestion",
-  low: "nit",
-};
-const UI_TO_DB: Record<Severity, string> = {
-  critical: "critical",
-  warning: "high",
-  suggestion: "medium",
-  nit: "low",
+  high: "high",
+  medium: "medium",
+  low: "low",
+  "changes requested": "changes_requested",
+  approved: "approved",
+  commented: "commented",
 };
 
-export function toUiSeverity(db: string): Severity {
-  return DB_TO_UI[db] ?? "nit";
-}
-
-function fmtAgo(iso: string | null): string {
-  if (!iso) return "—";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "—";
-  const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (s < 60) return "just now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d ago`;
-  return new Date(iso).toLocaleDateString();
-}
-
-function fmtDurationStr(ms: number | null): string {
-  if (ms == null) return "—";
-  const sec = Math.round(ms / 1000);
-  return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`;
-}
-
-/** completed run → verdict from severity counts; else from status. */
-function toVerdict(status: string, critical: number, findings: number): Verdict {
-  if (status === "queued" || status === "processing") return "running";
-  if (status === "failed" || status === "cancelled") return "commented";
-  if (critical > 0) return "changes_requested";
-  if (findings > 0) return "commented";
-  return "approved";
-}
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
-function severityCounts(r: any): SeverityCounts {
-  return {
-    critical: r.critical_count,
-    warning: r.high_count,
-    suggestion: r.medium_count,
-    nit: r.low_count,
-  };
-}
-
+/* ─── mappers ─────────────────────────────────────────────── */
 function mapRow(r: any): ReviewRow {
-  const counts = severityCounts(r);
-  const isDone = r.status === "completed";
   return {
     id: r.id,
-    prNumber: r.pull_request.pr_number,
-    prTitle: r.pull_request.title,
-    repo: r.repository.full_name,
-    author: r.pull_request.author_login,
-    filesChanged: r.pull_request.files_changed,
-    verdict: toVerdict(r.status, r.critical_count, r.findings_count),
-    trigger: r.trigger,
-    traceSteps: r.reasoning_step_count,
-    findings: counts,
-    cleanNote:
-      isDone && r.findings_count === 0 ? "Clean — no findings" : undefined,
-    durationSec: r.duration_ms != null ? Math.round(r.duration_ms / 1000) : 0,
-    ago: fmtAgo(r.completed_at ?? r.queued_at),
+    status: r.status,
+    verdict: r.verdict ?? "commented",
+    trigger: r.trigger ?? "",
+    prNumber: r.pr_number,
+    prTitle: r.pr_title ?? "",
+    prAuthor: r.pr_author ?? "",
+    repoFullName: r.repo_full_name ?? "",
+    repoOwner: r.repo_owner ?? "",
+    repoName: r.repo_name ?? "",
+    findingsCount: r.findings_count ?? 0,
+    criticalCount: r.critical_count ?? 0,
+    highCount: r.high_count ?? 0,
+    mediumCount: r.medium_count ?? 0,
+    lowCount: r.low_count ?? 0,
+    durationStr: r.duration_str ?? "—",
+    durationMs: r.duration_ms ?? null,
+    queuedAt: r.queued_at ?? "",
+    completedAt: r.completed_at ?? null,
+    modelUsed: r.model_used ?? null,
+    inputTokens: r.input_tokens ?? 0,
+    outputTokens: r.output_tokens ?? 0,
+    totalCostUsd: r.total_cost_usd ?? 0,
+    reasoningSteps: r.reasoning_steps ?? 0,
+    filesChanged: r.files_changed ?? 0,
+    timeAgo: fmtTimeAgo(r.queued_at),
   };
-}
-
-/** backend step_type → the component's three visual kinds. */
-function stepKind(t: string): StepKind {
-  if (t === "finding") return "record";
-  if (t === "summary") return "verdict";
-  return "thought";
-}
-
-function mapStep(s: any): TraceStep {
-  const step: TraceStep = {
-    n: s.step_number,
-    kind: stepKind(s.step_type),
-    durationSec: s.duration_ms != null ? +(s.duration_ms / 1000).toFixed(1) : 0,
-    tokens: s.tokens_used,
-    thought: s.content,
-  };
-  if (s.step_type === "tool_call" && s.tool_name) {
-    step.action = {
-      fn: s.tool_name,
-      arg: s.tool_input ? JSON.stringify(s.tool_input) : "",
-    };
-  }
-  if (s.step_type === "tool_result" && s.tool_output_summary) {
-    step.observation = {
-      summary: `Observation from ${s.tool_name ?? "tool"}`,
-      body: s.tool_output_summary,
-    };
-  }
-  return step;
 }
 
 function mapFinding(f: any): Finding {
   return {
     id: f.id,
-    severity: toUiSeverity(f.severity),
+    severity: f.severity,
     category: f.category,
-    file: f.file_path,
-    line: f.line_number,
-    note: f.description,
-    fix: f.suggestion,
-    codeSnippet: f.code_snippet,
-    wasPosted: f.was_posted,
-    githubCommentId: f.github_comment_id,
+    title: f.title,
+    description: f.description,
+    suggestion: f.suggestion ?? null,
+    filePath: f.file_path,
+    lineNumber: f.line_number ?? null,
+    diffPosition: f.diff_position ?? null,
+    wasPosted: f.was_posted ?? false,
+  };
+}
+
+function mapReasoningStep(s: any): ReasoningStep {
+  return {
+    stepNumber: s.step_number,
+    stepType: s.step_type,
+    content: s.content,
+    toolName: s.tool_name ?? null,
+    toolInput: s.tool_input ?? null,
+    toolOutputSummary: s.tool_output_summary ?? null,
+    tokensUsed: s.tokens_used ?? 0,
+    durationMs: s.duration_ms ?? null,
   };
 }
 
 function mapRepo(r: any): RepoSettings {
   return {
     id: r.id,
-    installationId: r.installation_id,
     fullName: r.full_name,
     owner: r.owner,
     name: r.name,
-    isPrivate: r.is_private,
-    defaultBranch: r.default_branch,
-    reviewEnabled: r.review_enabled,
-    totalReviews: r.total_reviews,
-    totalFindings: r.total_findings,
-    lastReviewAgo: fmtAgo(r.last_reviewed_at),
-    accountLogin: r.account_login,
-    reviewCategories: r.review_categories,
+    isPrivate: r.is_private ?? false,
+    reviewEnabled: r.review_enabled ?? true,
+    reviewCategories: r.review_categories ?? [],
+    totalReviews: r.total_reviews ?? 0,
+    totalFindings: r.total_findings ?? 0,
+    lastReviewAgo: r.last_reviewed_at ? fmtTimeAgo(r.last_reviewed_at) : null,
   };
 }
 
-// ---------------------------------------------------------------- fetch
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    cache: "no-store",
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`API ${res.status} on ${path}: ${body.slice(0, 200)}`);
-  }
-  return res.json() as Promise<T>;
-}
-
-// ---------------------------------------------------------------- fetchers
-
+/* ─── API functions ───────────────────────────────────────── */
 export async function getStats(): Promise<Stats> {
   const s = await api<any>("/api/stats");
-  const sev = s.findings_by_severity;
   const parts = [
-    sev.critical && `${sev.critical} critical`,
-    sev.high && `${sev.high} warning`,
-    sev.medium && `${sev.medium} suggestion`,
-    sev.low && `${sev.low} nit`,
+    s.critical_count && `${s.critical_count} critical`,
+    s.high_count && `${s.high_count} warning`,
+    s.medium_count && `${s.medium_count} suggestion`,
+    s.low_count && `${s.low_count} nit`,
   ].filter(Boolean);
   return {
-    reviewsThisMonth: s.reviews_total,
-    reviewsRunning: s.reviews_running,
-    reviewsFailed: s.reviews_failed,
-    findingsSurfaced: s.findings_total,
+    reviewsThisMonth: s.total_reviews ?? 0,
+    reviewsRunning: s.running ?? 0,
+    reviewsFailed: s.failed ?? 0,
+    findingsSurfaced: s.total_findings ?? 0,
     findingsBreakdown: parts.length ? parts.join(" · ") : "none yet",
-    medianReview: fmtDurationStr(s.median_review_ms),
-    reposActive: s.repos_active,
-    totalCostUsd: s.total_cost_usd,
+    medianReview: s.median_review_time ?? fmtDurationStr(s.median_review_time_ms),
+    spendCents: Math.round((s.total_cost_usd ?? 0) * 100),
+    activeRepos: s.active_repos ?? 0,
   };
 }
 
-export async function getReviews(filters: ReviewFilters = {}): Promise<ReviewRow[]> {
+export async function getReviews(
+  filters: ReviewFilters = {}
+): Promise<ReviewRow[]> {
   const params = new URLSearchParams();
   if (filters.status) params.set("status", filters.status);
   if (filters.repo) params.set("repo", filters.repo);
-  if (filters.severity) params.set("severity", UI_TO_DB[filters.severity]);
+  if (filters.severity) params.set("severity", UI_TO_DB[filters.severity] ?? filters.severity);
   params.set("limit", String(filters.limit ?? 50));
   params.set("offset", String(filters.offset ?? 0));
-
   const data = await api<any>(`/api/reviews?${params.toString()}`);
-  return data.items.map(mapRow);
+  const items = data.reviews ?? data.items ?? (Array.isArray(data) ? data : []);
+  return items.map(mapRow);
 }
 
 export async function getReview(id: string): Promise<ReviewDetail | null> {
@@ -328,71 +285,22 @@ export async function getReview(id: string): Promise<ReviewDetail | null> {
   const row = mapRow(r);
   return {
     ...row,
-    branch: { from: r.pull_request.head_branch, to: r.pull_request.base_branch },
-    additions: r.pull_request.lines_added,
-    deletions: r.pull_request.lines_removed,
+    branch: {
+      from: r.head_branch ?? r.pull_request?.head_branch ?? "",
+      to: r.base_branch ?? r.pull_request?.base_branch ?? "",
+    },
+    additions: r.additions ?? r.pull_request?.lines_added ?? 0,
+    deletions: r.deletions ?? r.pull_request?.lines_removed ?? 0,
     model: r.model_used ?? "—",
-    tokensUsed: r.input_tokens + r.output_tokens,
-    githubUrl: r.review_comment_url,
-    toolCalls: r.tool_calls_made,
-    errorMessage: r.error_message,
-    findingsList: r.findings.map(mapFinding),
-    trace: r.reasoning_steps.map(mapStep),
-  };
-}
-
-export interface InstalledRepo {
-  id: string;
-  fullName: string;
-  isPrivate: boolean;
-  defaultBranch: string;
-  reviewEnabled: boolean;
-}
-
-export interface Installation {
-  id: string;
-  accountLogin: string;
-  accountType: string; // "Organization" | "User"
-  accountAvatarUrl: string | null;
-  reviewEnabled: boolean;
-  reviewCategories: string[];
-  repositories: InstalledRepo[];
-}
-
-/**
- * Look up an installation by GitHub's numeric install id — used by the
- * /welcome page after GitHub redirects the user post-install. Returns null
- * if the webhook hasn't landed yet (the record is created asynchronously).
- */
-export async function getInstallationByGithubId(
-  githubInstallId: string | number
-): Promise<Installation | null> {
-  let r: any;
-  try {
-    r = await api<any>(`/api/installations/by-github-id/${githubInstallId}`);
-  } catch (e) {
-    if (e instanceof Error && e.message.includes("API 404")) return null;
-    throw e;
-  }
-  return {
-    id: r.id,
-    accountLogin: r.account_login,
-    accountType: r.account_type,
-    accountAvatarUrl: r.account_avatar_url,
-    reviewEnabled: r.review_enabled,
-    reviewCategories: r.review_categories,
-    repositories: r.repositories.map((repo: any) => ({
-      id: repo.id,
-      fullName: repo.full_name,
-      isPrivate: repo.is_private,
-      defaultBranch: repo.default_branch,
-      reviewEnabled: repo.review_enabled,
-    })),
+    tokensUsed: (r.input_tokens ?? 0) + (r.output_tokens ?? 0),
+    findings: (r.findings ?? []).map(mapFinding),
+    reasoningStepsList: (r.reasoning_steps ?? []).map(mapReasoningStep),
   };
 }
 
 export async function getRepoSettings(): Promise<RepoSettings[]> {
-  const repos = await api<any[]>("/api/repos");
+  const data = await api<any>("/api/repos");
+  const repos = data.repos ?? (Array.isArray(data) ? data : []);
   return repos.map(mapRepo);
 }
 
@@ -407,6 +315,25 @@ export async function saveRepoSettings(
   return mapRepo(repo);
 }
 
+export async function getInstallationByGithubId(
+  githubInstallId: string | number
+): Promise<Installation | null> {
+  let r: any;
+  try {
+    r = await api<any>(`/api/installations/by-github-id/${githubInstallId}`);
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("API 404")) return null;
+    throw e;
+  }
+  return {
+    id: r.id,
+    accountLogin: r.account_login,
+    accountType: r.account_type,
+    accountAvatarUrl: r.account_avatar_url ?? null,
+    reviewEnabled: r.review_enabled ?? true,
+  };
+}
+
 export async function saveInstallationSettings(
   installationId: string,
   updates: { reviewEnabled?: boolean; reviewCategories?: string[] }
@@ -419,15 +346,3 @@ export async function saveInstallationSettings(
     }),
   });
 }
-
-/*
- * NOTES — fields intentionally dropped because the backend has no column:
- *   • Finding.lines[] (per-line diff), excerptLabel, noteEmphasis
- *       → backend stores only code_snippet (string) + description + suggestion.
- *   • Stats.acceptanceRate → developer_reaction column exists but is never
- *       written, so acceptance can't be computed yet.
- *   • ReviewDetail.summary prose → the agent posts a summary to GitHub but
- *       does not persist the text; use review_comment_url to link out.
- *   • ReviewDetail.filesRead → not tracked.
- * If you later add these columns, extend the schema + mapper here in tandem.
- */
