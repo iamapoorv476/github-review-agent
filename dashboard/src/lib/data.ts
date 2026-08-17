@@ -77,6 +77,7 @@ export interface Finding {
 }
 
 export interface ReasoningStep {
+  n: number;            // alias of stepNumber, used as React key in trace list
   stepNumber: number;
   stepType: string;
   content: string;
@@ -219,6 +220,7 @@ function mapFinding(f: any): Finding {
 
 function mapReasoningStep(s: any): ReasoningStep {
   return {
+    n: s.step_number,
     stepNumber: s.step_number,
     stepType: s.step_type,
     content: s.content,
