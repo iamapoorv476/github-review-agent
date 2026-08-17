@@ -566,7 +566,7 @@ async def list_installations(
 # ─────────────────────────────────────────────
 @router.get("/api/installations/by-github-id/{github_install_id}")
 async def get_installation_by_github_id(
-    github_install_id: int,
+    github_install_id: str,
     db: AsyncSession = Depends(get_db_session),
 ):
     """
@@ -575,6 +575,11 @@ async def get_installation_by_github_id(
     GitHub redirects back, the frontend only knows the GitHub install id
     (from the query string) and has no API key yet, so this has to be a
     public lookup keyed on that id rather than the authed /api/repos route.
+
+    Accepts github_install_id as a string (not int) — GitHub install ids
+    are stored as text on the Installation model, and asyncpg raises a
+    DatatypeMismatchError (surfaced as a 500) if you compare a varchar
+    column to a Python int.
     """
     result = await db.execute(
         select(Installation).where(
@@ -608,7 +613,6 @@ async def get_installation_by_github_id(
             for r in repos
         ],
     }
-
 
 # ─────────────────────────────────────────────
 # GET /api/connect  (requires auth)
