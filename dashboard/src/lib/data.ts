@@ -56,9 +56,11 @@ export type Verdict =
   | "commented"
   | "reviewing"
   | "failed"
-  | "queued";
+  | "queued"
+  | "running";
 
-export type Severity = "critical" | "high" | "medium" | "low";
+// badges.tsx uses: critical | warning | suggestion | nit
+export type Severity = "critical" | "warning" | "suggestion" | "nit";
 export type Category = "security" | "performance" | "quality";
 
 export interface Finding {
@@ -74,45 +76,6 @@ export interface Finding {
   wasPosted: boolean;
 }
 
-export interface ReviewRow {
-  id: string;
-  status: string;
-  verdict: Verdict;
-  trigger: string;
-  prNumber: number;
-  prTitle: string;
-  prAuthor: string;
-  repoFullName: string;
-  repoOwner: string;
-  repoName: string;
-  findingsCount: number;
-  criticalCount: number;
-  highCount: number;
-  mediumCount: number;
-  lowCount: number;
-  durationStr: string;
-  durationMs: number | null;
-  queuedAt: string;
-  completedAt: string | null;
-  modelUsed: string | null;
-  inputTokens: number;
-  outputTokens: number;
-  totalCostUsd: number;
-  reasoningSteps: number;
-  filesChanged: number;
-  timeAgo: string;
-}
-
-export interface ReviewDetail extends ReviewRow {
-  branch: { from: string; to: string };
-  additions: number;
-  deletions: number;
-  model: string;
-  tokensUsed: number;
-  findings: Finding[];
-  reasoningStepsList: ReasoningStep[];
-}
-
 export interface ReasoningStep {
   stepNumber: number;
   stepType: string;
@@ -122,6 +85,72 @@ export interface ReasoningStep {
   toolOutputSummary: string | null;
   tokensUsed: number;
   durationMs: number | null;
+}
+
+// FindingDots expects this shape
+export interface FindingCounts {
+  critical: number;
+  warning: number;
+  suggestion: number;
+  nit: number;
+}
+
+export interface ReviewRow {
+  id: string;
+  status: string;
+  verdict: Verdict;
+  trigger: string;
+
+  /* PR */
+  prNumber: number;
+  prTitle: string;
+  prAuthor: string;
+  author: string;
+
+  /* Repo */
+  repoFullName: string;
+  repoOwner: string;
+  repoName: string;
+  repo: string;
+
+  /* Findings */
+  findingsCount: number;
+  criticalCount: number;
+  highCount: number;
+  mediumCount: number;
+  lowCount: number;
+  findings: Finding[];
+  counts: FindingCounts;       // for FindingDots component
+  cleanNote: string | undefined; // string | undefined (not null)
+
+  /* Timing */
+  durationStr: string;
+  durationMs: number | null;
+  durationSec: number;         // milliseconds as number for component
+  queuedAt: string;
+  completedAt: string | null;
+  timeAgo: string;
+  ago: string;
+
+  /* LLM */
+  modelUsed: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  totalCostUsd: number;
+
+  /* Misc */
+  reasoningSteps: number;
+  traceSteps: number;
+  filesChanged: number;
+}
+
+export interface ReviewDetail extends ReviewRow {
+  branch: { from: string; to: string };
+  additions: number;
+  deletions: number;
+  model: string;
+  tokensUsed: number;
+  reasoningStepsList: ReasoningStep[];
 }
 
 export interface RepoSettings {
@@ -153,42 +182,22 @@ export interface ReviewFilters {
   offset?: number;
 }
 
-/* ─── mappers ─────────────────────────────────────────────── */
-function mapRow(r: any): ReviewRow {
-  return {
-    id: r.id,
-    status: r.status,
-    verdict: r.verdict ?? "commented",
-    trigger: r.trigger ?? "",
-    prNumber: r.pr_number,
-    prTitle: r.pr_title ?? "",
-    prAuthor: r.pr_author ?? "",
-    repoFullName: r.repo_full_name ?? "",
-    repoOwner: r.repo_owner ?? "",
-    repoName: r.repo_name ?? "",
-    findingsCount: r.findings_count ?? 0,
-    criticalCount: r.critical_count ?? 0,
-    highCount: r.high_count ?? 0,
-    mediumCount: r.medium_count ?? 0,
-    lowCount: r.low_count ?? 0,
-    durationStr: r.duration_str ?? "—",
-    durationMs: r.duration_ms ?? null,
-    queuedAt: r.queued_at ?? "",
-    completedAt: r.completed_at ?? null,
-    modelUsed: r.model_used ?? null,
-    inputTokens: r.input_tokens ?? 0,
-    outputTokens: r.output_tokens ?? 0,
-    totalCostUsd: r.total_cost_usd ?? 0,
-    reasoningSteps: r.reasoning_steps ?? 0,
-    filesChanged: r.files_changed ?? 0,
-    timeAgo: fmtTimeAgo(r.queued_at),
-  };
+/* ─── severity mapping: DB → UI ──────────────────────────── */
+function mapSeverity(s: string): Severity {
+  switch (s) {
+    case "critical": return "critical";
+    case "high":     return "warning";
+    case "medium":   return "suggestion";
+    case "low":      return "nit";
+    default:         return "nit";
+  }
 }
 
+/* ─── mappers ─────────────────────────────────────────────── */
 function mapFinding(f: any): Finding {
   return {
     id: f.id,
-    severity: f.severity,
+    severity: mapSeverity(f.severity),
     category: f.category,
     title: f.title,
     description: f.description,
@@ -210,6 +219,79 @@ function mapReasoningStep(s: any): ReasoningStep {
     toolOutputSummary: s.tool_output_summary ?? null,
     tokensUsed: s.tokens_used ?? 0,
     durationMs: s.duration_ms ?? null,
+  };
+}
+
+function mapRow(r: any): ReviewRow {
+  const repoFullName = r.repo_full_name ?? "";
+  const prAuthor = r.pr_author ?? "";
+  const reasoningSteps = r.reasoning_steps ?? 0;
+  const durationMs = r.duration_ms ?? null;
+  const findingsCount = r.findings_count ?? 0;
+  const criticalCount = r.critical_count ?? 0;
+  const highCount = r.high_count ?? 0;
+  const mediumCount = r.medium_count ?? 0;
+  const lowCount = r.low_count ?? 0;
+  const timeAgo = fmtTimeAgo(r.queued_at);
+
+  const findings = Array.isArray(r.findings)
+    ? r.findings.map(mapFinding)
+    : [];
+
+  // FindingDots counts shape
+  const counts: FindingCounts = {
+    critical: criticalCount,
+    warning: highCount,
+    suggestion: mediumCount,
+    nit: lowCount,
+  };
+
+  const cleanNote: string | undefined =
+    findingsCount === 0 && r.status === "completed"
+      ? "Clean — no findings"
+      : undefined;
+
+  return {
+    id: r.id,
+    status: r.status,
+    verdict: r.verdict ?? "commented",
+    trigger: r.trigger ?? "",
+
+    prNumber: r.pr_number,
+    prTitle: r.pr_title ?? "",
+    prAuthor,
+    author: prAuthor,
+
+    repoFullName,
+    repoOwner: r.repo_owner ?? "",
+    repoName: r.repo_name ?? "",
+    repo: repoFullName,
+
+    findingsCount,
+    criticalCount,
+    highCount,
+    mediumCount,
+    lowCount,
+    findings,
+    counts,
+    cleanNote,
+
+    durationStr: r.duration_str ?? "—",
+    durationMs,
+    durationSec: durationMs ?? 0,   // number in ms, component formats it
+    queuedAt: r.queued_at ?? "",
+    completedAt: r.completed_at ?? null,
+    timeAgo,
+    ago: timeAgo,
+
+    modelUsed: r.model_used ?? null,
+    inputTokens: r.input_tokens ?? 0,
+    outputTokens: r.output_tokens ?? 0,
+    totalCostUsd: r.total_cost_usd ?? 0,
+
+    reasoningSteps,
+    traceSteps: reasoningSteps,
+    filesChanged: r.files_changed ?? 0,
   };
 }
 
@@ -243,7 +325,8 @@ export async function getStats(): Promise<Stats> {
     reviewsFailed: s.failed ?? 0,
     findingsSurfaced: s.total_findings ?? 0,
     findingsBreakdown: parts.length ? parts.join(" · ") : "none yet",
-    medianReview: s.median_review_time ?? fmtDurationStr(s.median_review_time_ms),
+    medianReview:
+      s.median_review_time ?? fmtDurationStr(s.median_review_time_ms),
     totalCostUsd: s.total_cost_usd ?? 0,
     reposActive: s.active_repos ?? 0,
   };
@@ -259,7 +342,8 @@ export async function getReviews(
   params.set("limit", String(filters.limit ?? 50));
   params.set("offset", String(filters.offset ?? 0));
   const data = await api<any>(`/api/reviews?${params.toString()}`);
-  const items = data.reviews ?? data.items ?? (Array.isArray(data) ? data : []);
+  const items =
+    data.reviews ?? data.items ?? (Array.isArray(data) ? data : []);
   return items.map(mapRow);
 }
 
@@ -282,8 +366,9 @@ export async function getReview(id: string): Promise<ReviewDetail | null> {
     deletions: r.deletions ?? r.pull_request?.lines_removed ?? 0,
     model: r.model_used ?? "—",
     tokensUsed: (r.input_tokens ?? 0) + (r.output_tokens ?? 0),
-    findings: (r.findings ?? []).map(mapFinding),
-    reasoningStepsList: (r.reasoning_steps ?? []).map(mapReasoningStep),
+    reasoningStepsList: Array.isArray(r.reasoning_steps)
+      ? r.reasoning_steps.map(mapReasoningStep)
+      : [],
   };
 }
 

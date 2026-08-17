@@ -98,7 +98,7 @@ export default async function ReviewsPage() {
               </div>
               <div className="max-md:hidden"><VerdictBadge verdict={r.verdict} /></div>
               <div className="max-md:hidden">
-                <FindingDots counts={r.findings} cleanNote={r.cleanNote} />
+                <FindingDots counts={r.counts} cleanNote={r.cleanNote} />
               </div>
               <div className="font-mono text-[11.5px] text-ink-2 tabular-nums max-md:hidden">
                 {fmtDuration(r.durationSec)}
