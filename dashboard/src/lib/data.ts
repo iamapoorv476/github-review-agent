@@ -96,6 +96,17 @@ export interface ReasoningStep {
   durationMs: number | null;
 }
 
+// Shape expected by TraceStepItem (trace-step.tsx) — a friendlier view over
+// a ReasoningStep for rendering the reasoning-trace spine.
+export interface TraceStep extends ReasoningStep {
+  kind: "thought" | "record" | "verdict";
+  durationSec: number;               // alias of durationMs, in seconds
+  tokens: number;                    // alias of tokensUsed
+  thought: string;                   // alias of content
+  action: { fn: string; arg: string } | null;
+  observation: { summary: string; body: string } | null;
+}
+
 // FindingDots expects this shape, and the review detail page reads
 // counts directly off `findings` (e.g. review.findings.critical)
 export interface FindingCounts {
@@ -166,7 +177,7 @@ export interface ReviewDetail extends ReviewRow {
   model: string;
   tokensUsed: number;
   reasoningStepsList: ReasoningStep[];
-  trace: ReasoningStep[];      // alias of reasoningStepsList
+  trace: TraceStep[];          // richer view for TraceStepItem
   toolCalls: number;           // count of steps that invoked a tool
 }
 
@@ -257,6 +268,35 @@ function mapReasoningStep(s: any): ReasoningStep {
     toolOutputSummary: s.tool_output_summary ?? null,
     tokensUsed: s.tokens_used ?? 0,
     durationMs: s.duration_ms ?? null,
+  };
+}
+
+// stepType (raw backend value) → the 3-way "kind" the trace UI renders
+function mapStepKind(stepType: string): TraceStep["kind"] {
+  switch (stepType) {
+    case "create_finding":
+    case "record":
+      return "record";
+    case "verdict":
+    case "summary":
+      return "verdict";
+    default:
+      return "thought"; // includes plain reasoning and tool_call steps
+  }
+}
+
+function toTraceStep(step: ReasoningStep): TraceStep {
+  const arg = step.toolInput ? JSON.stringify(step.toolInput) : "";
+  return {
+    ...step,
+    kind: mapStepKind(step.stepType),
+    durationSec: step.durationMs != null ? Math.round(step.durationMs / 1000) : 0,
+    tokens: step.tokensUsed,
+    thought: step.content,
+    action: step.toolName ? { fn: step.toolName, arg } : null,
+    observation: step.toolOutputSummary
+      ? { summary: `${step.toolName ?? "tool"} output`, body: step.toolOutputSummary }
+      : null,
   };
 }
 
@@ -415,7 +455,7 @@ export async function getReview(id: string): Promise<ReviewDetail | null> {
     model: r.model_used ?? "—",
     tokensUsed: (r.input_tokens ?? 0) + (r.output_tokens ?? 0),
     reasoningStepsList,
-    trace: reasoningStepsList,
+    trace: reasoningStepsList.map(toTraceStep),
     toolCalls,
   };
 }
