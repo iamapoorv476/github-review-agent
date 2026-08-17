@@ -74,6 +74,14 @@ export interface Finding {
   lineNumber: number | null;
   diffPosition: number | null;
   wasPosted: boolean;
+
+  /* aliases / extra fields used by FindingCard */
+  file: string;                  // alias of filePath
+  line: number | null;           // alias of lineNumber
+  note: string;                  // alias of description (margin note text)
+  fix: string | null;            // alias of suggestion
+  codeSnippet: string | null;    // flagged code excerpt, plain string
+  githubCommentId: number | string | null; // for deep-linking to the PR review comment
 }
 
 export interface ReasoningStep {
@@ -213,17 +221,28 @@ function mapSeverity(s: string): Severity {
 
 /* ─── mappers ─────────────────────────────────────────────── */
 function mapFinding(f: any): Finding {
+  const filePath = f.file_path;
+  const lineNumber = f.line_number ?? null;
+  const description = f.description;
+  const suggestion = f.suggestion ?? null;
   return {
     id: f.id,
     severity: mapSeverity(f.severity),
     category: f.category,
     title: f.title,
-    description: f.description,
-    suggestion: f.suggestion ?? null,
-    filePath: f.file_path,
-    lineNumber: f.line_number ?? null,
+    description,
+    suggestion,
+    filePath,
+    lineNumber,
     diffPosition: f.diff_position ?? null,
     wasPosted: f.was_posted ?? false,
+
+    file: filePath,
+    line: lineNumber,
+    note: description,
+    fix: suggestion,
+    codeSnippet: f.code_snippet ?? null,
+    githubCommentId: f.github_comment_id ?? null,
   };
 }
 
