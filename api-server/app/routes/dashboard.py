@@ -561,58 +561,7 @@ async def list_installations(
         ]
     }
 
-# ─────────────────────────────────────────────
-# GET /api/installations/by-github-id/{github_install_id}
-# ─────────────────────────────────────────────
-@router.get("/api/installations/by-github-id/{github_install_id}")
-async def get_installation_by_github_id(
-    github_install_id: str,
-    db: AsyncSession = Depends(get_db_session),
-):
-    """
-    Look up an installation by its GitHub installation id, with its
-    connected repos. Used by the post-install /welcome page: right after
-    GitHub redirects back, the frontend only knows the GitHub install id
-    (from the query string) and has no API key yet, so this has to be a
-    public lookup keyed on that id rather than the authed /api/repos route.
 
-    Accepts github_install_id as a string (not int) — GitHub install ids
-    are stored as text on the Installation model, and asyncpg raises a
-    DatatypeMismatchError (surfaced as a 500) if you compare a varchar
-    column to a Python int.
-    """
-    result = await db.execute(
-        select(Installation).where(
-            Installation.github_install_id == github_install_id
-        )
-    )
-    installation = result.scalar_one_or_none()
-    if not installation:
-        raise HTTPException(status_code=404, detail="Installation not found")
-
-    repos_result = await db.execute(
-        select(Repository).where(Repository.installation_id == installation.id)
-    )
-    repos = repos_result.scalars().all()
-
-    return {
-        "id": str(installation.id),
-        "github_install_id": installation.github_install_id,
-        "account_login": installation.account_login,
-        "account_type": installation.account_type,
-        "account_avatar_url": installation.account_avatar_url,
-        "review_enabled": installation.review_enabled,
-        "review_categories": installation.review_categories,
-        "repositories": [
-            {
-                "id": str(r.id),
-                "full_name": r.full_name,
-                "is_private": r.is_private,
-                "review_enabled": r.review_enabled,
-            }
-            for r in repos
-        ],
-    }
 
 # ─────────────────────────────────────────────
 # GET /api/connect  (requires auth)
