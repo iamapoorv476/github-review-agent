@@ -22,6 +22,9 @@ const VERDICT_META: Record<Verdict, { label: string; cls: string; blink?: boolea
   changes_requested: { label: "Changes req.", cls: "text-rubric bg-rubric-wash" },
   commented: { label: "Commented", cls: "text-gold bg-gold-wash" },
   running: { label: "Reviewing", cls: "text-lapis bg-lapis-wash", blink: true },
+  reviewing: { label: "Reviewing", cls: "text-lapis bg-lapis-wash", blink: true },
+  queued: { label: "Queued", cls: "text-ink-3 bg-slate-wash" },
+  failed: { label: "Failed", cls: "text-rubric bg-rubric-wash" },
 };
 
 export function VerdictBadge({ verdict, long }: { verdict: Verdict; long?: boolean }) {
