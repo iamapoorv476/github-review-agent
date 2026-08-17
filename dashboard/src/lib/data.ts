@@ -46,8 +46,8 @@ export interface Stats {
   findingsSurfaced: number;
   findingsBreakdown: string;
   medianReview: string;
-  spendCents: number;
-  activeRepos: number;
+  totalCostUsd: number;
+  reposActive: number;
 }
 
 export type Verdict =
@@ -153,17 +153,6 @@ export interface ReviewFilters {
   offset?: number;
 }
 
-/* ─── severity filter mapping ─────────────────────────────── */
-const UI_TO_DB: Record<string, string> = {
-  critical: "critical",
-  high: "high",
-  medium: "medium",
-  low: "low",
-  "changes requested": "changes_requested",
-  approved: "approved",
-  commented: "commented",
-};
-
 /* ─── mappers ─────────────────────────────────────────────── */
 function mapRow(r: any): ReviewRow {
   return {
@@ -255,8 +244,8 @@ export async function getStats(): Promise<Stats> {
     findingsSurfaced: s.total_findings ?? 0,
     findingsBreakdown: parts.length ? parts.join(" · ") : "none yet",
     medianReview: s.median_review_time ?? fmtDurationStr(s.median_review_time_ms),
-    spendCents: Math.round((s.total_cost_usd ?? 0) * 100),
-    activeRepos: s.active_repos ?? 0,
+    totalCostUsd: s.total_cost_usd ?? 0,
+    reposActive: s.active_repos ?? 0,
   };
 }
 
@@ -266,7 +255,7 @@ export async function getReviews(
   const params = new URLSearchParams();
   if (filters.status) params.set("status", filters.status);
   if (filters.repo) params.set("repo", filters.repo);
-  if (filters.severity) params.set("severity", UI_TO_DB[filters.severity] ?? filters.severity);
+  if (filters.severity) params.set("severity", filters.severity);
   params.set("limit", String(filters.limit ?? 50));
   params.set("offset", String(filters.offset ?? 0));
   const data = await api<any>(`/api/reviews?${params.toString()}`);
