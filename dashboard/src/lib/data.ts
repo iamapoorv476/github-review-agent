@@ -312,7 +312,7 @@ function mapRow(r: any): ReviewRow {
   const lowCount = r.low_count ?? 0;
   const timeAgo = fmtTimeAgo(r.queued_at);
 
-  const findingsList = Array.isArray(r.findings)
+  const findingsList: Finding[] = Array.isArray(r.findings)
     ? r.findings.map(mapFinding)
     : [];
 
@@ -439,7 +439,7 @@ export async function getReview(id: string): Promise<ReviewDetail | null> {
     throw e;
   }
   const row = mapRow(r);
-  const reasoningStepsList = Array.isArray(r.reasoning_steps)
+  const reasoningStepsList: ReasoningStep[] = Array.isArray(r.reasoning_steps)
     ? r.reasoning_steps.map(mapReasoningStep)
     : [];
   const toolCalls = reasoningStepsList.filter((s) => s.toolName).length;
