@@ -2,7 +2,7 @@ import uuid
 import structlog
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
 
@@ -19,21 +19,22 @@ router = APIRouter(tags=["dashboard"])
 
 
 # ─────────────────────────────────────────────
-# Auth dependency (optional — imported from middleware)
+# Auth dependency
 # ─────────────────────────────────────────────
 async def optional_installation(
-    request=None,
+    request: Request,
     db: AsyncSession = Depends(get_db_session),
 ) -> Optional[Installation]:
     """
     Returns Installation if a valid Bearer gra_... key is present,
     None otherwise (public / demo mode).
-    """
-    from fastapi import Request
-    from app.services.api_key import resolve_api_key
 
-    if request is None:
-        return None
+    NOTE: `request` MUST be typed as `Request` — FastAPI only injects
+    the real request object when the parameter has this annotation.
+    An untyped `request=None` silently stays None forever, which is
+    why this dependency previously always returned None.
+    """
+    from app.services.api_key import resolve_api_key
 
     auth = request.headers.get("Authorization", "")
     if not auth:
@@ -560,11 +561,23 @@ async def list_installations(
             for i in installations
         ]
     }
+
+
+# ─────────────────────────────────────────────
+# GET /api/installations/by-github-id/{github_install_id}
+# ─────────────────────────────────────────────
 @router.get("/api/installations/by-github-id/{github_install_id}")
 async def get_installation_by_github_id(
     github_install_id: int,
     db: AsyncSession = Depends(get_db_session),
 ):
+    """
+    Look up an installation by its GitHub installation id, with its
+    connected repos and API key. Used by the post-install /welcome page —
+    right after GitHub redirects back, the frontend only knows the GitHub
+    install id (from the query string) and has no API key yet, so this
+    has to be a public lookup keyed on that id.
+    """
     result = await db.execute(
         select(Installation).where(
             Installation.github_install_id == github_install_id
@@ -609,7 +622,6 @@ async def get_installation_by_github_id(
 # ─────────────────────────────────────────────
 @router.get("/api/connect")
 async def get_connect_info(
-    request=None,
     db: AsyncSession = Depends(get_db_session),
     installation: Optional[Installation] = Depends(optional_installation),
 ):
@@ -621,7 +633,7 @@ async def get_connect_info(
     key = await ensure_api_key(db, installation)
     await db.commit()
 
-    api_url = "https://your-railway-url.up.railway.app"
+    api_url = "https://github-review-agent-production-c5a2.up.railway.app"
 
     return {
         "api_key": key,
