@@ -87,7 +87,8 @@ export interface ReasoningStep {
   durationMs: number | null;
 }
 
-// FindingDots expects this shape
+// FindingDots expects this shape, and the review detail page reads
+// counts directly off `findings` (e.g. review.findings.critical)
 export interface FindingCounts {
   critical: number;
   warning: number;
@@ -119,8 +120,9 @@ export interface ReviewRow {
   highCount: number;
   mediumCount: number;
   lowCount: number;
-  findings: Finding[];
-  counts: FindingCounts;       // for FindingDots component
+  findingsList: Finding[];     // the actual list of findings
+  findings: FindingCounts;     // aggregate counts (review.findings.critical / .warning / ...)
+  counts: FindingCounts;       // alias of `findings`, kept for FindingDots component
   cleanNote: string | undefined; // string | undefined (not null)
 
   /* Timing */
@@ -142,6 +144,10 @@ export interface ReviewRow {
   reasoningSteps: number;
   traceSteps: number;
   filesChanged: number;
+
+  /* Run status */
+  errorMessage: string | null;
+  githubUrl: string | null;
 }
 
 export interface ReviewDetail extends ReviewRow {
@@ -151,6 +157,8 @@ export interface ReviewDetail extends ReviewRow {
   model: string;
   tokensUsed: number;
   reasoningStepsList: ReasoningStep[];
+  trace: ReasoningStep[];      // alias of reasoningStepsList
+  toolCalls: number;           // count of steps that invoked a tool
 }
 
 export interface RepoSettings {
@@ -234,11 +242,12 @@ function mapRow(r: any): ReviewRow {
   const lowCount = r.low_count ?? 0;
   const timeAgo = fmtTimeAgo(r.queued_at);
 
-  const findings = Array.isArray(r.findings)
+  const findingsList = Array.isArray(r.findings)
     ? r.findings.map(mapFinding)
     : [];
 
-  // FindingDots counts shape
+  // FindingCounts shape — used both as `findings` (aggregate counts) and
+  // `counts` (kept for the FindingDots component)
   const counts: FindingCounts = {
     critical: criticalCount,
     warning: highCount,
@@ -272,7 +281,8 @@ function mapRow(r: any): ReviewRow {
     highCount,
     mediumCount,
     lowCount,
-    findings,
+    findingsList,
+    findings: counts,
     counts,
     cleanNote,
 
@@ -292,6 +302,9 @@ function mapRow(r: any): ReviewRow {
     reasoningSteps,
     traceSteps: reasoningSteps,
     filesChanged: r.files_changed ?? 0,
+
+    errorMessage: r.error_message ?? null,
+    githubUrl: r.github_comment_url ?? r.github_url ?? null,
   };
 }
 
@@ -356,6 +369,11 @@ export async function getReview(id: string): Promise<ReviewDetail | null> {
     throw e;
   }
   const row = mapRow(r);
+  const reasoningStepsList = Array.isArray(r.reasoning_steps)
+    ? r.reasoning_steps.map(mapReasoningStep)
+    : [];
+  const toolCalls = reasoningStepsList.filter((s) => s.toolName).length;
+
   return {
     ...row,
     branch: {
@@ -366,9 +384,9 @@ export async function getReview(id: string): Promise<ReviewDetail | null> {
     deletions: r.deletions ?? r.pull_request?.lines_removed ?? 0,
     model: r.model_used ?? "—",
     tokensUsed: (r.input_tokens ?? 0) + (r.output_tokens ?? 0),
-    reasoningStepsList: Array.isArray(r.reasoning_steps)
-      ? r.reasoning_steps.map(mapReasoningStep)
-      : [],
+    reasoningStepsList,
+    trace: reasoningStepsList,
+    toolCalls,
   };
 }
 
