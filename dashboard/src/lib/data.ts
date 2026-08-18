@@ -370,7 +370,7 @@ function mapRow(r: any): ReviewRow {
 
     durationStr: r.duration_str ?? "—",
     durationMs,
-    durationSec: durationMs ?? 0,   // number in ms, component formats it
+    durationSec: durationMs != null ? Math.round(durationMs / 1000) : 0,   // number in ms, component formats it
     queuedAt: r.queued_at ?? "",
     completedAt: r.completed_at ?? null,
     timeAgo,

@@ -71,10 +71,7 @@ export function Sidebar() {
           <span className="pulse-dot h-[7px] w-[7px] flex-none rounded-full bg-verdigris" />
           1 review running
         </div>
-        <div className="mt-1 text-[11.5px] leading-normal text-ink-2">
-          <code className="rounded bg-recess px-1 font-mono text-[10.5px]">acme/web-app</code> #517 —
-          reading diff, step 4 of ~9
-        </div>
+        
       </div>
 
       <div className="mt-auto border-t border-line px-2 pt-2.5 text-[11.5px] leading-relaxed text-ink-3 max-md:hidden">
