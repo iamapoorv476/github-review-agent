@@ -66,14 +66,6 @@ export function Sidebar() {
         );
       })}
 
-      <div className="mt-4 rounded-lg border border-line bg-raised p-3 max-md:hidden" role="status">
-        <div className="flex items-center gap-2 text-xs font-semibold">
-          <span className="pulse-dot h-[7px] w-[7px] flex-none rounded-full bg-verdigris" />
-          1 review running
-        </div>
-        
-      </div>
-
       <div className="mt-auto border-t border-line px-2 pt-2.5 text-[11.5px] leading-relaxed text-ink-3 max-md:hidden">
         Installed on <b className="font-semibold text-ink-2">acme</b> · 3 repos
         <br />

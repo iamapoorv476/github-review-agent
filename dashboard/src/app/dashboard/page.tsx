@@ -31,6 +31,15 @@ export default async function ReviewsPage() {
         <ReReviewButton />
       </div>
 
+      <div className="mb-5 flex items-center gap-2 rounded-md border border-line bg-lapis-wash px-4 py-2.5 text-[12.5px] text-ink-2">
+        <span aria-hidden="true">🧪</span>
+        <span>
+          Live on my own test repo while in beta — findings below come from bugs I planted to
+          exercise the agent.{" "}
+          
+        </span>
+      </div>
+
       <div className="mb-6 grid grid-cols-4 gap-2.5 max-lg:grid-cols-2">
         {statCards.map((s) => (
           <div key={s.k} className="rounded-lg border border-line bg-raised px-4 py-3.5 shadow-card">
@@ -109,7 +118,6 @@ export default async function ReviewsPage() {
           const cls =
             "row-in grid w-full grid-cols-[minmax(280px,1.7fr)_130px_150px_110px_90px] items-center gap-4 border-b border-line px-4.5 py-3 text-left transition-colors last:border-b-0 hover:bg-[#F7F8F4] max-md:grid-cols-[1fr_auto]";
           const style = { animationDelay: `${0.02 + i * 0.04}s` };
-          // Completed runs have a detail page; running/failed rows are not links.
           return r.verdict !== "running" ? (
             <Link key={r.id} href={`/dashboard/reviews/${r.id}`} className={`${cls} no-underline text-inherit`} style={style}>
               {inner}
